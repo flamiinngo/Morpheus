@@ -3,14 +3,22 @@
 // Powered by Hermes 3 via OpenRouter
 //
 // Uses native Hermes <tool_call> format
-// instead of OpenRouter tools parameter
-// (no providers support tools for Hermes)
+// with robust JSON parsing for all response formats
 // ============================================
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
 const HERMES_MODEL = 'nousresearch/hermes-3-llama-3.1-405b'
 const VISION_MODEL = 'google/gemini-2.0-flash-001'
+
+const TOOL_NAMES = [
+  'analyze_screenshot',
+  'create_architecture_plan',
+  'write_file',
+  'review_file',
+  'fix_file',
+  'project_complete'
+]
 
 const AGENT_TOOLS = [
   {
@@ -192,6 +200,147 @@ const AGENT_TOOLS = [
   }
 ]
 
+// ============================================
+// JSON REPAIR UTILITY
+// Hermes sometimes outputs malformed JSON
+// (extra braces, trailing commas, etc.)
+// This attempts to fix common issues.
+// ============================================
+function tryParseJSON(str) {
+  // Attempt 1: Parse as-is
+  try {
+    return JSON.parse(str)
+  } catch (e) {
+    // continue
+  }
+
+  // Attempt 2: Strip extra trailing braces one at a time
+  let trimmed = str.trim()
+  while (trimmed.endsWith('}')) {
+    trimmed = trimmed.slice(0, -1)
+    try {
+      return JSON.parse(trimmed + '}')
+    } catch (e) {
+      // continue
+    }
+  }
+
+  // Attempt 3: Remove trailing commas before } or ]
+  let cleaned = str
+    .replace(/,\s*}/g, '}')
+    .replace(/,\s*$/g, ']')
+  try {
+    return JSON.parse(cleaned)
+  } catch (e) {
+    // continue
+  }
+
+  // Attempt 4: Try to extract the first valid JSON object
+  const firstBrace = str.indexOf('{')
+  if (firstBrace >= 0) {
+    let braceCount = 0
+    for (let i = firstBrace; i < str.length; i++) {
+      if (str[i] === '{') braceCount++
+      if (str[i] === '}') braceCount--
+      if (braceCount === 0) {
+        try {
+          return JSON.parse(str.substring(firstBrace, i + 1))
+        } catch (e) {
+          break
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+// ============================================
+// PARSE TOOL CALLS FROM HERMES RESPONSE
+// Supports 3 formats:
+// 1. <tool_call>{"name":"x","arguments":{...}}</tool_call>
+// 2. {"name":"x","arguments":{...}}
+// 3. tool_name{"arg":...} or tool_name {"arg":...}
+// ============================================
+function parseToolCalls(content) {
+  if (!content) return []
+
+  const toolCalls = []
+  const text = content.trim()
+
+  // Method 1: <tool_call> tags
+  const tagRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g
+  let match
+  while ((match = tagRegex.exec(text)) !== null) {
+    const parsed = tryParseJSON(match[1].trim())
+    if (parsed && parsed.name) {
+      toolCalls.push({
+        id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        type: 'function',
+        function: {
+          name: parsed.name,
+          arguments: JSON.stringify(parsed.arguments || {})
+        }
+      })
+    }
+  }
+  if (toolCalls.length > 0) return toolCalls
+
+  // Method 2: Raw JSON {"name":"tool","arguments":{...}}
+  const parsed = tryParseJSON(text)
+  if (parsed && parsed.name && typeof parsed.name === 'string') {
+    toolCalls.push({
+      id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      type: 'function',
+      function: {
+        name: parsed.name,
+        arguments: JSON.stringify(parsed.arguments || {})
+      }
+    })
+    return toolCalls
+  }
+
+  // Method 3: toolname{...} or toolname {...}
+  for (const toolName of TOOL_NAMES) {
+    const toolIdx = text.indexOf(toolName)
+    if (toolIdx !== -1) {
+      const afterName = text.substring(toolIdx + toolName.length).trim()
+      if (afterName.startsWith('{')) {
+        let braceCount = 0
+        let endIdx = -1
+        for (let i = 0; i < afterName.length; i++) {
+          if (afterName[i] === '{') braceCount++
+          if (afterName[i] === '}') braceCount--
+          if (braceCount === 0) {
+            endIdx = i + 1
+            break
+          }
+        }
+        if (endIdx > 0) {
+          const argsJson = afterName.substring(0, endIdx)
+          const argsParsed = tryParseJSON(argsJson)
+          if (argsParsed) {
+            toolCalls.push({
+              id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              type: 'function',
+              function: {
+                name: toolName,
+                arguments: JSON.stringify(argsParsed)
+              }
+            })
+            return toolCalls
+          }
+        }
+      }
+    }
+  }
+
+  return toolCalls
+}
+
+// ============================================
+// MORPHEUS AGENT CLASS
+// ============================================
 export class MorpheusAgent {
   constructor(apiKey, onEvent) {
     this.apiKey = apiKey
@@ -216,12 +365,10 @@ export class MorpheusAgent {
 
   // ============================================
   // HERMES API CALL
-  // Uses native <tool_call> format in system prompt
-  // instead of OpenRouter tools parameter
+  // Injects tools into system prompt
+  // Parses all Hermes response formats
   // ============================================
   async callHermes(messages, tools = null, model = HERMES_MODEL) {
-    // Inject tool definitions into system message for native Hermes function calling
-    // Hermes 3 was trained on <tool_call> format natively
     let finalMessages = messages
     if (tools && messages.length > 0) {
       const toolDescriptions = tools.map(t => JSON.stringify(t.function, null, 2)).join('\n\n')
@@ -286,93 +433,9 @@ export class MorpheusAgent {
 
         const message = result.choices[0].message
 
+        // Parse Hermes tool calls from response content
         if (message.content) {
-          const toolCalls = []
-          const content = message.content.trim()
-
-          // Known tool names for matching
-          const toolNames = ['analyze_screenshot', 'create_architecture_plan', 'write_file', 'review_file', 'fix_file', 'project_complete']
-
-          // Method 1: <tool_call> tags
-          const tagRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g
-          let match
-          while ((match = tagRegex.exec(content)) !== null) {
-            try {
-              const parsed = JSON.parse(match[1].trim())
-              if (parsed.name) {
-                toolCalls.push({
-                  id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                  type: 'function',
-                  function: {
-                    name: parsed.name,
-                    arguments: JSON.stringify(parsed.arguments || {})
-                  }
-                })
-              }
-            } catch (e) {
-              console.warn('Failed to parse tagged tool call:', match[1])
-            }
-          }
-
-          // Method 2: Raw JSON {"name":"tool","arguments":{...}}
-          if (toolCalls.length === 0) {
-            try {
-              const parsed = JSON.parse(content)
-              if (parsed.name && typeof parsed.name === 'string') {
-                toolCalls.push({
-                  id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                  type: 'function',
-                  function: {
-                    name: parsed.name,
-                    arguments: JSON.stringify(parsed.arguments || {})
-                  }
-                })
-              }
-            } catch (e) {
-              // Not raw JSON, try other methods
-            }
-          }
-
-          // Method 3: toolname{...} or toolname {...} format (e.g. write_file{"filename":...})
-          if (toolCalls.length === 0) {
-            for (const toolName of toolNames) {
-              const toolIdx = content.indexOf(toolName)
-              if (toolIdx !== -1) {
-                const afterName = content.substring(toolIdx + toolName.length).trim()
-                if (afterName.startsWith('{')) {
-                  // Find the matching closing brace
-                  let braceCount = 0
-                  let endIdx = -1
-                  for (let i = 0; i < afterName.length; i++) {
-                    if (afterName[i] === '{') braceCount++
-                    if (afterName[i] === '}') braceCount--
-                    if (braceCount === 0) {
-                      endIdx = i + 1
-                      break
-                    }
-                  }
-                  if (endIdx > 0) {
-                    try {
-                      const argsJson = afterName.substring(0, endIdx)
-                      const parsed = JSON.parse(argsJson)
-                      toolCalls.push({
-                        id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                        type: 'function',
-                        function: {
-                          name: toolName,
-                          arguments: JSON.stringify(parsed)
-                        }
-                      })
-                      break
-                    } catch (e) {
-                      console.warn(`Failed to parse ${toolName} args`)
-                    }
-                  }
-                }
-              }
-            }
-          }
-
+          const toolCalls = parseToolCalls(message.content)
           if (toolCalls.length > 0) {
             message.tool_calls = toolCalls
             message.content = null
@@ -380,6 +443,7 @@ export class MorpheusAgent {
         }
 
         return message
+
       } catch (error) {
         if (error.name === 'AbortError') throw error
         retries--
@@ -405,7 +469,6 @@ export class MorpheusAgent {
       message: 'Morpheus is opening its eye... analyzing the screenshot'
     })
 
-    // Clean the base64 — remove any data URL prefix, whitespace, newlines
     let cleanBase64 = imageBase64
       .replace(/^data:image\/[a-zA-Z]+;base64,/, '')
       .replace(/\s/g, '')
@@ -704,7 +767,6 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
 
   // ============================================
   // HISTORY MANAGEMENT
-  // Trim conversation to avoid token limits
   // ============================================
   trimHistory() {
     const system = this.conversationHistory[0]
@@ -725,8 +787,7 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
   }
 
   // ============================================
-  // TOOL CALL HANDLER
-  // Routes tool calls to the right handler
+  // TOOL CALL ROUTER
   // ============================================
   async handleToolCall(toolCall) {
     const { name, arguments: argsStr } = toolCall.function
@@ -743,13 +804,17 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
           })
         args = JSON.parse(cleaned)
       } catch (e2) {
-        this.emit('log', { type: 'error', message: `Failed to parse tool args for ${name}. Retrying...` })
-        this.conversationHistory.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: JSON.stringify({ error: 'Invalid JSON in arguments. Please try again with valid JSON.' })
-        })
-        return
+        // Last resort: use tryParseJSON
+        args = tryParseJSON(argsStr)
+        if (!args) {
+          this.emit('log', { type: 'error', message: `Failed to parse tool args for ${name}. Asking agent to retry...` })
+          this.conversationHistory.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: JSON.stringify({ error: 'Invalid JSON in arguments. Please try again with valid JSON.' })
+          })
+          return
+        }
       }
     }
 
@@ -781,7 +846,9 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     }
   }
 
-  // ---- Tool Handlers ----
+  // ============================================
+  // TOOL HANDLERS
+  // ============================================
 
   async handleAnalyze(toolCallId, args) {
     this.emit('log', {
@@ -1002,6 +1069,10 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
 
     this.isRunning = false
   }
+
+  // ============================================
+  // STATUS & CONTROLS
+  // ============================================
 
   setStatus(status) {
     this.status = status
