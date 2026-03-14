@@ -18,7 +18,6 @@ import {
   Download,
   Square,
   Zap,
-  Github,
   Image,
   Clipboard,
   ChevronLeft,
@@ -164,7 +163,11 @@ function ScreenshotPreview({ thumbnail, onClear }) {
 export default function App() {
   // ---- State ----
   const [apiKey, setApiKey] = useState(() => {
-    return localStorage.getItem('morpheus_api_key') || import.meta.env.VITE_OPENROUTER_API_KEY || ''
+    try {
+      return localStorage.getItem('morpheus_api_key') || import.meta.env.VITE_OPENROUTER_API_KEY || ''
+    } catch {
+      return import.meta.env.VITE_OPENROUTER_API_KEY || ''
+    }
   })
   const [showKeyModal, setShowKeyModal] = useState(false)
   const [agentStatus, setAgentStatus] = useState('idle')
@@ -191,7 +194,11 @@ export default function App() {
   // ---- Handle API key submission ----
   const handleApiKeySubmit = (key) => {
     setApiKey(key)
-    localStorage.setItem('morpheus_api_key', key)
+    try {
+      localStorage.setItem('morpheus_api_key', key)
+    } catch {
+      // localStorage might be unavailable — that's fine, key is in state
+    }
     setShowKeyModal(false)
     toast.success('Morpheus is awake')
   }
@@ -283,11 +290,29 @@ export default function App() {
 
       try {
         // Create thumbnail for display
-        const thumb = await createThumbnail(file)
+        let thumb
+        try {
+          thumb = await createThumbnail(file)
+        } catch (thumbErr) {
+          console.warn('Thumbnail creation failed, using object URL fallback:', thumbErr)
+          thumb = URL.createObjectURL(file)
+        }
         setThumbnail(thumb)
 
         // Resize image for vision model
-        const imageBase64 = await resizeImage(file)
+        let imageBase64
+        try {
+          imageBase64 = await resizeImage(file)
+        } catch (resizeErr) {
+          toast.error(`Failed to process image: ${resizeErr.message}`)
+          return
+        }
+
+        // Validate the base64 result
+        if (!imageBase64 || imageBase64.length < 50) {
+          toast.error('Image conversion produced empty data. Try a different image.')
+          return
+        }
 
         toast.success('Screenshot loaded. Morpheus is waking up...')
 
@@ -296,6 +321,7 @@ export default function App() {
         agentRef.current = agent
         agent.run(imageBase64)
       } catch (error) {
+        console.error('Image processing error:', error)
         toast.error(`Failed to process image: ${error.message}`)
       }
     },
@@ -305,10 +331,14 @@ export default function App() {
   // ---- Handle clipboard paste ----
   useEffect(() => {
     const handlePaste = (e) => {
-      const file = getImageFromClipboard(e)
-      if (file) {
-        e.preventDefault()
-        handleDrop([file])
+      try {
+        const file = getImageFromClipboard(e)
+        if (file) {
+          e.preventDefault()
+          handleDrop([file])
+        }
+      } catch (err) {
+        console.warn('Clipboard paste handling failed:', err)
       }
     }
 
