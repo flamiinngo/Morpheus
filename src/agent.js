@@ -395,19 +395,6 @@ export class MorpheusAgent {
 
     return visionResponse.content
   }
-    const visionResponse = await this.callHermes(visionMessages, null, VISION_MODEL)
-
-    this.emit('log', {
-      type: 'analyzing',
-      message: 'Screenshot analyzed. Morpheus sees everything.'
-    })
-
-    this.emit('vision_result', {
-      analysis: visionResponse.content
-    })
-
-    return visionResponse.content
-  }
 
   async run(imageBase64) {
     if (this.isRunning) return
