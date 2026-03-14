@@ -282,48 +282,119 @@ export class MorpheusAgent {
     }
   }
 
-  async analyzeScreenshot(imageBase64) {
+    async analyzeScreenshot(imageBase64) {
     this.setStatus('analyzing')
     this.emit('log', {
       type: 'analyzing',
       message: 'Morpheus is opening its eye... analyzing the screenshot'
     })
 
-    const sizeKB = Math.round((imageBase64.length * 3) / 4 / 1024)
+    // Clean the base64 — remove any data URL prefix, whitespace, newlines
+    let cleanBase64 = imageBase64
+      .replace(/^data:image\/[a-zA-Z]+;base64,/, '')
+      .replace(/\s/g, '')
+      .replace(/\n/g, '')
+      .replace(/\r/g, '')
+
+    const sizeKB = Math.round((cleanBase64.length * 3) / 4 / 1024)
     this.emit('log', {
       type: 'analyzing',
       message: `Image size: ${sizeKB}KB — sending to vision model...`
     })
 
-    const visionMessages = [
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: `You are Morpheus, an expert UI/UX analyst. Analyze this screenshot of a web application in EXTREME detail.
-
-Describe:
-1. Every visible UI component (navbar, hero, cards, buttons, forms, footers, sidebars, etc.)
-2. Layout system (grid, flexbox patterns, column counts, spacing)
-3. Design tokens (colors with hex guesses, typography, font sizes, border radius, shadows)
-4. Content structure (headings, body text, CTAs, images, icons)
-5. Interactive elements (buttons, links, dropdowns, inputs)
-6. Overall design style (minimal, corporate, dark mode, glassmorphism, etc.)
-7. Responsive hints
-
-Be precise. A developer will use your analysis to rebuild this pixel-perfect.`
-          },
-          {
-            type: 'image_url',
-            image_url: {
-              url: `data:image/jpeg;base64,${imageBase64}`
+    // Build the request manually to avoid any encoding issues
+    const requestBody = {
+      model: VISION_MODEL,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'You are Morpheus, an expert UI/UX analyst. Analyze this screenshot of a web application in EXTREME detail. Describe: 1. Every visible UI component (navbar, hero, cards, buttons, forms, footers, sidebars, etc.) 2. Layout system (grid, flexbox patterns, column counts, spacing) 3. Design tokens (colors with hex guesses, typography, font sizes, border radius, shadows) 4. Content structure (headings, body text, CTAs, images, icons) 5. Interactive elements (buttons, links, dropdowns, inputs) 6. Overall design style (minimal, corporate, dark mode, glassmorphism, etc.) 7. Responsive hints. Be precise. A developer will use your analysis to rebuild this pixel-perfect.'
+            },
+            {
+              type: 'image_url',
+              image_url: {
+                url: 'data:image/jpeg;base64,' + cleanBase64
+              }
             }
-          }
-        ]
-      }
-    ]
+          ]
+        }
+      ],
+      temperature: 0.3,
+      max_tokens: 4096
+    }
 
+    // Make the fetch call directly instead of going through callHermes
+    // This avoids any tool-related parameters being added
+    let retries = 3
+    let delay = 3000
+    let visionResponse = null
+
+    while (retries > 0) {
+      try {
+        const response = await fetch(OPENROUTER_URL, {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + this.apiKey,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': window.location.origin,
+            'X-Title': 'Morpheus Agent'
+          },
+          body: JSON.stringify(requestBody),
+          signal: this.abortController?.signal
+        })
+
+        if (response.status === 429) {
+          retries--
+          this.emit('log', {
+            type: 'warning',
+            message: `Rate limited. Waiting ${delay / 1000}s...`
+          })
+          await new Promise(r => setTimeout(r, delay))
+          delay *= 2
+          continue
+        }
+
+        if (!response.ok) {
+          const errText = await response.text()
+          throw new Error(`Vision API Error ${response.status}: ${errText}`)
+        }
+
+        const result = await response.json()
+
+        if (!result.choices || result.choices.length === 0) {
+          throw new Error('Empty response from vision model')
+        }
+
+        visionResponse = result.choices[0].message
+        break
+
+      } catch (error) {
+        if (error.name === 'AbortError') throw error
+        retries--
+        if (retries === 0) throw error
+        this.emit('log', {
+          type: 'warning',
+          message: `Vision request failed: ${error.message}. Retrying in ${delay / 1000}s...`
+        })
+        await new Promise(r => setTimeout(r, delay))
+        delay *= 2
+      }
+    }
+
+    this.emit('log', {
+      type: 'analyzing',
+      message: 'Screenshot analyzed. Morpheus sees everything.'
+    })
+
+    this.emit('vision_result', {
+      analysis: visionResponse.content
+    })
+
+    return visionResponse.content
+  }
     const visionResponse = await this.callHermes(visionMessages, null, VISION_MODEL)
 
     this.emit('log', {
