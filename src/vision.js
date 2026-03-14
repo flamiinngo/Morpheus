@@ -35,7 +35,6 @@ export function resizeImage(file, maxDimension = 1024) {
 
       let { width, height } = img
 
-      // Calculate new dimensions maintaining aspect ratio
       const ratio = Math.min(maxDimension / width, maxDimension / height, 1)
       const newWidth = Math.round(width * ratio)
       const newHeight = Math.round(height * ratio)
@@ -49,18 +48,15 @@ export function resizeImage(file, maxDimension = 1024) {
       ctx.imageSmoothingQuality = 'high'
       ctx.drawImage(img, 0, 0, newWidth, newHeight)
 
-      // Use JPEG at 0.7 quality — much smaller than PNG
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.7)
-      const base64 = dataUrl.split(',')[1]
-      
-      // Safety check — if still too large, compress more
-      if (base64.length > 500000) {
-        // Re-compress at lower quality
-        const smallerUrl = canvas.toDataURL('image/jpeg', 0.4)
-        resolve(smallerUrl.split(',')[1])
-      } else {
-        resolve(base64)
-      }
+      canvas.toBlob((blob) => {
+        const reader = new FileReader()
+        reader.onloadend = () => {
+          const base64 = reader.result.split(',')[1]
+          resolve(base64)
+        }
+        reader.onerror = () => reject(new Error('Failed to read blob'))
+        reader.readAsDataURL(blob)
+      }, 'image/jpeg', 0.7)
     }
 
     img.onerror = () => {
