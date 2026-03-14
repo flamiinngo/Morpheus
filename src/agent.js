@@ -339,6 +339,24 @@ function parseToolCalls(content) {
 }
 
 // ============================================
+// SAFE BASE64 CLEANING
+// Only strips the data URI prefix if present.
+// Does NOT aggressively strip whitespace from
+// the base64 payload itself (which corrupts it).
+// ============================================
+function cleanBase64(base64String) {
+  // Only remove the data URI prefix — don't touch the actual base64 data
+  let cleaned = base64String
+  const commaIndex = cleaned.indexOf(',')
+  if (commaIndex !== -1 && commaIndex < 100) {
+    // Looks like a data URI — strip the prefix
+    cleaned = cleaned.substring(commaIndex + 1)
+  }
+  // Trim only leading/trailing whitespace, not internal
+  return cleaned.trim()
+}
+
+// ============================================
 // MORPHEUS AGENT CLASS
 // ============================================
 export class MorpheusAgent {
@@ -469,17 +487,19 @@ export class MorpheusAgent {
       message: 'Morpheus is opening its eye... analyzing the screenshot'
     })
 
-    let cleanBase64 = imageBase64
-      .replace(/^data:image\/[a-zA-Z]+;base64,/, '')
-      .replace(/\s/g, '')
-      .replace(/\n/g, '')
-      .replace(/\r/g, '')
+    // Safely clean the base64 — just strip data URI prefix, nothing else
+    const cleanedBase64 = cleanBase64(imageBase64)
 
-    const sizeKB = Math.round((cleanBase64.length * 3) / 4 / 1024)
+    const sizeKB = Math.round((cleanedBase64.length * 3) / 4 / 1024)
     this.emit('log', {
       type: 'analyzing',
-      message: `Image size: ${sizeKB}KB — sending to vision model...`
+      message: `Image size: ~${sizeKB}KB — sending to vision model...`
     })
+
+    // Validate the base64 isn't empty or obviously broken
+    if (!cleanedBase64 || cleanedBase64.length < 100) {
+      throw new Error('Image data is empty or too small. Please try a different screenshot.')
+    }
 
     const requestBody = {
       model: VISION_MODEL,
@@ -494,7 +514,7 @@ export class MorpheusAgent {
             {
               type: 'image_url',
               image_url: {
-                url: 'data:image/jpeg;base64,' + cleanBase64
+                url: 'data:image/jpeg;base64,' + cleanedBase64
               }
             }
           ]
@@ -510,6 +530,11 @@ export class MorpheusAgent {
 
     while (retries > 0) {
       try {
+        this.emit('log', {
+          type: 'analyzing',
+          message: `Sending to ${VISION_MODEL}... (attempt ${4 - retries}/3)`
+        })
+
         const response = await fetch(OPENROUTER_URL, {
           method: 'POST',
           headers: {
@@ -532,9 +557,20 @@ export class MorpheusAgent {
           continue
         }
 
+        if (response.status === 413) {
+          throw new Error('Image too large for the API. Try a smaller screenshot (under 2000x2000 pixels).')
+        }
+
         if (!response.ok) {
           const errText = await response.text()
-          throw new Error(`Vision API Error ${response.status}: ${errText}`)
+          // Provide helpful error messages for common failures
+          if (response.status === 401) {
+            throw new Error('Invalid API key. Check your OpenRouter key and try again.')
+          }
+          if (response.status === 402) {
+            throw new Error('Insufficient credits on OpenRouter. Add credits at openrouter.ai/credits')
+          }
+          throw new Error(`Vision API Error ${response.status}: ${errText.slice(0, 300)}`)
         }
 
         const result = await response.json()
@@ -557,6 +593,10 @@ export class MorpheusAgent {
         await new Promise(r => setTimeout(r, delay))
         delay *= 2
       }
+    }
+
+    if (!visionResponse) {
+      throw new Error('Vision analysis failed after all retries. Check your API key and try again.')
     }
 
     this.emit('log', {
