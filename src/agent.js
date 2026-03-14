@@ -1,27 +1,19 @@
 // ============================================
 // MORPHEUS AGENT — The Autonomous Build Brain
-// Powered by Hermes via OpenRouter
-// 
-// This is NOT a wrapper. This is a real agent
-// loop with planning, execution, self-review,
-// and self-correction. Hermes decides what to
-// build, when to review, and when it's done.
+// Powered by Hermes 3 via OpenRouter
 // ============================================
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
-// PAID models — Hermes 3 (the real deal) + Gemini Flash (best vision)
 const HERMES_MODEL = 'nousresearch/hermes-3-llama-3.1-405b'
 const VISION_MODEL = 'google/gemini-2.0-flash-001'
-
-// ---- Tool Definitions for Hermes Function Calling ----
 
 const AGENT_TOOLS = [
   {
     type: 'function',
     function: {
       name: 'analyze_screenshot',
-      description: 'Analyze a screenshot to identify UI components, layout patterns, design system, colors, typography, and overall architecture. Returns a structured analysis.',
+      description: 'Analyze a screenshot to identify UI components, layout patterns, design system, colors, typography, and overall architecture.',
       parameters: {
         type: 'object',
         properties: {
@@ -112,7 +104,7 @@ const AGENT_TOOLS = [
     type: 'function',
     function: {
       name: 'review_file',
-      description: 'Review a previously written file for bugs, missing imports, style inconsistencies, or logical errors. Decide whether to fix it or move on.',
+      description: 'Review a previously written file for bugs, missing imports, style inconsistencies, or logical errors.',
       parameters: {
         type: 'object',
         properties: {
@@ -196,12 +188,6 @@ const AGENT_TOOLS = [
   }
 ]
 
-
-// ============================================
-// MorpheusAgent Class
-// The autonomous build loop
-// ============================================
-
 export class MorpheusAgent {
   constructor(apiKey, onEvent) {
     this.apiKey = apiKey
@@ -284,10 +270,8 @@ export class MorpheusAgent {
 
       } catch (error) {
         if (error.name === 'AbortError') throw error
-
         retries--
         if (retries === 0) throw error
-
         this.emit('log', {
           type: 'warning',
           message: `Request failed: ${error.message}. Retrying in ${delay / 1000}s...`
@@ -300,46 +284,48 @@ export class MorpheusAgent {
 
   async analyzeScreenshot(imageBase64) {
     this.setStatus('analyzing')
-    this.emit('log', { 
-      type: 'analyzing', 
-      message: 'Morpheus is opening its eye... analyzing the screenshot' 
+    this.emit('log', {
+      type: 'analyzing',
+      message: 'Morpheus is opening its eye... analyzing the screenshot'
+    })
+
+    const sizeKB = Math.round((imageBase64.length * 3) / 4 / 1024)
+    this.emit('log', {
+      type: 'analyzing',
+      message: `Image size: ${sizeKB}KB — sending to vision model...`
     })
 
     const visionMessages = [
       {
-        role: 'system',
-        content: `You are Morpheus, an expert UI/UX analyst. You are looking at a screenshot of a web application or website. 
-
-Provide an EXTREMELY detailed analysis including:
-1. Every visible UI component (navbar, hero, cards, buttons, forms, footers, sidebars, modals, etc.)
-2. The layout system (grid, flexbox patterns, column counts, spacing)
-3. Design system tokens (colors — be specific with hex guesses, typography — font family and sizes, border radius patterns, shadow styles)
-4. Content structure (headings, body text, CTAs, images, icons)
-5. Interactive elements (buttons, links, dropdowns, inputs)
-6. Overall design style (minimal, corporate, playful, dark mode, glassmorphism, etc.)
-7. Responsive hints (does it look mobile-first? desktop-first?)
-
-Be precise. Be thorough. A developer will use your analysis to rebuild this EXACTLY.`
-      },
-      {
         role: 'user',
         content: [
           {
-            type: 'image_url',
-            image_url: {
-              url: `data:image/png;base64,${imageBase64}`
-            }
+            type: 'text',
+            text: `You are Morpheus, an expert UI/UX analyst. Analyze this screenshot of a web application in EXTREME detail.
+
+Describe:
+1. Every visible UI component (navbar, hero, cards, buttons, forms, footers, sidebars, etc.)
+2. Layout system (grid, flexbox patterns, column counts, spacing)
+3. Design tokens (colors with hex guesses, typography, font sizes, border radius, shadows)
+4. Content structure (headings, body text, CTAs, images, icons)
+5. Interactive elements (buttons, links, dropdowns, inputs)
+6. Overall design style (minimal, corporate, dark mode, glassmorphism, etc.)
+7. Responsive hints
+
+Be precise. A developer will use your analysis to rebuild this pixel-perfect.`
           },
           {
-            type: 'text',
-            text: 'Analyze this screenshot in detail. Identify every component, the design system, layout patterns, and anything a developer would need to rebuild it pixel-perfect.'
+            type: 'image_url',
+            image_url: {
+              url: `data:image/jpeg;base64,${imageBase64}`
+            }
           }
         ]
       }
     ]
 
     const visionResponse = await this.callHermes(visionMessages, null, VISION_MODEL)
-    
+
     this.emit('log', {
       type: 'analyzing',
       message: 'Screenshot analyzed. Morpheus sees everything.'
@@ -437,12 +423,12 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
           )
         } catch (error) {
           if (error.name === 'AbortError') throw error
-          
+
           this.emit('log', {
             type: 'error',
             message: `Agent call failed: ${error.message}`
           })
-          
+
           if (this.builtFiles.length > 0) {
             this.emit('log', {
               type: 'warning',
@@ -473,7 +459,7 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
             type: 'thinking',
             message: response.content.slice(0, 200)
           })
-          
+
           this.conversationHistory.push({
             role: 'user',
             content: 'Continue. Use your tools to keep building. If all files are written and reviewed, call project_complete.'
@@ -485,7 +471,7 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
               type: 'warning',
               message: 'Morpheus went quiet. Wrapping up with what we have.'
             })
-            
+
             if (this.builtFiles.length > 0) {
               this.setStatus('complete')
               this.emit('complete', {
@@ -545,14 +531,14 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     const system = this.conversationHistory[0]
     const firstUser = this.conversationHistory[1]
     const recent = this.conversationHistory.slice(-20)
-    
+
     const summaryMessage = {
       role: 'user',
-      content: `[CONTEXT SUMMARY] You have already built these files: ${this.builtFiles.join(', ')}. You have reviewed: ${this.reviewedFiles.join(', ')}. Continue building the remaining files from the plan. Build order was: ${this.buildOrder.join(' → ')}`
+      content: `[CONTEXT SUMMARY] Files built: ${this.builtFiles.join(', ')}. Reviewed: ${this.reviewedFiles.join(', ')}. Build order: ${this.buildOrder.join(' → ')}. Continue building remaining files.`
     }
 
     this.conversationHistory = [system, firstUser, summaryMessage, ...recent]
-    
+
     this.emit('log', {
       type: 'thinking',
       message: 'Morpheus compressed its memory to stay focused.'
@@ -568,16 +554,17 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     } catch (e) {
       try {
         const cleaned = argsStr
-          .replace(/\n/g, '\\n')
-          .replace(/\r/g, '\\r')
-          .replace(/\t/g, '\\t')
+          .replace(/[\x00-\x1F\x7F]/g, (ch) => {
+            const escapes = { '\n': '\\n', '\r': '\\r', '\t': '\\t' }
+            return escapes[ch] || ''
+          })
         args = JSON.parse(cleaned)
       } catch (e2) {
-        this.emit('log', { type: 'error', message: `Failed to parse tool args for ${name}. Asking Hermes to retry...` })
+        this.emit('log', { type: 'error', message: `Failed to parse tool args for ${name}. Retrying...` })
         this.conversationHistory.push({
           role: 'tool',
           tool_call_id: toolCall.id,
-          content: JSON.stringify({ error: 'Invalid JSON in arguments. Please try again with valid JSON. Make sure all strings are properly escaped.' })
+          content: JSON.stringify({ error: 'Invalid JSON in arguments. Please try again with valid JSON.' })
         })
         return
       }
@@ -620,9 +607,9 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     this.conversationHistory.push({
       role: 'tool',
       tool_call_id: toolCallId,
-      content: JSON.stringify({ 
+      content: JSON.stringify({
         status: 'success',
-        message: 'Screenshot analysis complete. Now create the architecture plan.' 
+        message: 'Screenshot analysis complete. Now create the architecture plan.'
       })
     })
   }
@@ -699,7 +686,7 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
       tool_call_id: toolCallId,
       content: JSON.stringify({
         status: 'success',
-        message: `File ${args.filename} written successfully (${this.builtFiles.length}/${this.buildOrder.length || '?'}). Now review this file with review_file, then continue to the next file.`
+        message: `File ${args.filename} written (${this.builtFiles.length}/${this.buildOrder.length || '?'}). Now review this file with review_file, then continue to the next file.`
       })
     })
   }
@@ -712,7 +699,7 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
 
     this.emit('log', {
       type: 'reviewing',
-      message: `🔍 Reviewing ${args.filename}: ${issueCount} issue(s) found, verdict: ${args.verdict}`
+      message: `🔍 Reviewing ${args.filename}: ${issueCount} issue(s), verdict: ${args.verdict}`
     })
 
     if (args.issues && args.issues.length > 0) {
@@ -792,7 +779,7 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     const nextFile = this.buildOrder.find(f => !this.builtFiles.includes(f))
     let nextInstruction = nextFile
       ? `Fix applied. Now write the next file: ${nextFile} using write_file.`
-      : 'Fix applied. All files are written and reviewed. Call project_complete now.'
+      : 'Fix applied. All files written and reviewed. Call project_complete now.'
 
     this.conversationHistory.push({
       role: 'tool',
