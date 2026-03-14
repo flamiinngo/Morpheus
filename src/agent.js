@@ -1,6 +1,6 @@
 // ============================================
 // MORPHEUS AGENT — The Autonomous Build Brain
-// Powered by Hermes via OpenRouter (FREE TIER)
+// Powered by Hermes via OpenRouter
 // 
 // This is NOT a wrapper. This is a real agent
 // loop with planning, execution, self-review,
@@ -10,12 +10,11 @@
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
-// FREE models — no payment required
-const HERMES_MODEL = 'nousresearch/hermes-3-llama-3.1-405b:free'
-const VISION_MODEL = 'google/gemini-2.0-flash-001:free'
+// PAID models — Hermes 3 (the real deal) + Gemini Flash (best vision)
+const HERMES_MODEL = 'nousresearch/hermes-3-llama-3.1-405b'
+const VISION_MODEL = 'google/gemini-2.0-flash-001'
 
 // ---- Tool Definitions for Hermes Function Calling ----
-// These are the tools Morpheus can use autonomously
 
 const AGENT_TOOLS = [
   {
@@ -206,11 +205,11 @@ const AGENT_TOOLS = [
 export class MorpheusAgent {
   constructor(apiKey, onEvent) {
     this.apiKey = apiKey
-    this.onEvent = onEvent // callback for UI updates
+    this.onEvent = onEvent
     this.conversationHistory = []
-    this.files = {} // { filename: { code, description } }
+    this.files = {}
     this.plan = null
-    this.status = 'idle' // idle | analyzing | planning | building | reviewing | fixing | complete | error
+    this.status = 'idle'
     this.isRunning = false
     this.currentFile = null
     this.buildOrder = []
@@ -219,14 +218,12 @@ export class MorpheusAgent {
     this.abortController = null
   }
 
-  // ---- Emit events to the UI ----
   emit(type, data) {
     if (this.onEvent) {
       this.onEvent({ type, data, timestamp: Date.now() })
     }
   }
 
-  // ---- Call OpenRouter API ----
   async callHermes(messages, tools = null, model = HERMES_MODEL) {
     const body = {
       model,
@@ -240,9 +237,8 @@ export class MorpheusAgent {
       body.tool_choice = 'auto'
     }
 
-    // Retry logic for free tier rate limits
     let retries = 3
-    let delay = 2000
+    let delay = 3000
 
     while (retries > 0) {
       try {
@@ -258,16 +254,19 @@ export class MorpheusAgent {
           signal: this.abortController?.signal
         })
 
-        // Rate limited — wait and retry
         if (response.status === 429) {
           retries--
           this.emit('log', {
             type: 'warning',
-            message: `Rate limited. Waiting ${delay / 1000}s before retry... (${retries} retries left)`
+            message: `Rate limited. Waiting ${delay / 1000}s... (${retries} retries left)`
           })
           await new Promise(r => setTimeout(r, delay))
-          delay *= 2 // exponential backoff
+          delay *= 2
           continue
+        }
+
+        if (response.status === 402) {
+          throw new Error('Insufficient credits. Add more at openrouter.ai/credits')
         }
 
         if (!response.ok) {
@@ -277,7 +276,6 @@ export class MorpheusAgent {
 
         const result = await response.json()
 
-        // Check if the response has choices
         if (!result.choices || result.choices.length === 0) {
           throw new Error('Empty response from model')
         }
@@ -300,7 +298,6 @@ export class MorpheusAgent {
     }
   }
 
-  // ---- Analyze screenshot with vision model ----
   async analyzeScreenshot(imageBase64) {
     this.setStatus('analyzing')
     this.emit('log', { 
@@ -355,7 +352,6 @@ Be precise. Be thorough. A developer will use your analysis to rebuild this EXAC
     return visionResponse.content
   }
 
-  // ---- Main autonomous agent loop ----
   async run(imageBase64) {
     if (this.isRunning) return
     this.isRunning = true
@@ -366,17 +362,14 @@ Be precise. Be thorough. A developer will use your analysis to rebuild this EXAC
     this.conversationHistory = []
 
     try {
-      // PHASE 1: Analyze the screenshot
       const analysis = await this.analyzeScreenshot(imageBase64)
 
-      // PHASE 2: Plan the architecture
       this.setStatus('planning')
       this.emit('log', {
         type: 'analyzing',
         message: 'Morpheus is thinking... planning the architecture'
       })
 
-      // Initialize conversation with the analysis
       this.conversationHistory = [
         {
           role: 'system',
@@ -415,7 +408,7 @@ DESIGN APPROACH:
 - Add hover states, transitions, and micro-interactions
 - Use semantic HTML elements
 
-IMPORTANT: You must call ONE tool at a time. After each tool call, wait for the result before calling the next tool.
+IMPORTANT: Call ONE tool at a time. After each tool call, wait for the result before calling the next tool.
 
 You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
         },
@@ -425,17 +418,15 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
         }
       ]
 
-      // PHASE 3: Enter the autonomous loop
-      let maxIterations = 50 // safety limit
+      let maxIterations = 50
       let iteration = 0
       let consecutiveEmptyResponses = 0
 
       while (this.isRunning && iteration < maxIterations) {
         iteration++
 
-        // Small delay between calls to respect free tier rate limits
         if (iteration > 1) {
-          await new Promise(r => setTimeout(r, 1500))
+          await new Promise(r => setTimeout(r, 1000))
         }
 
         let response
@@ -452,7 +443,6 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
             message: `Agent call failed: ${error.message}`
           })
           
-          // If we have files built, mark as complete anyway
           if (this.builtFiles.length > 0) {
             this.emit('log', {
               type: 'warning',
@@ -470,10 +460,8 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
           throw error
         }
 
-        // Add assistant response to history
         this.conversationHistory.push(response)
 
-        // Check if Hermes wants to use tools
         if (response.tool_calls && response.tool_calls.length > 0) {
           consecutiveEmptyResponses = 0
           for (const toolCall of response.tool_calls) {
@@ -481,19 +469,16 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
           }
         } else if (response.content) {
           consecutiveEmptyResponses = 0
-          // Hermes is thinking out loud — log it
           this.emit('log', {
             type: 'thinking',
             message: response.content.slice(0, 200)
           })
           
-          // Push a prompt to keep going
           this.conversationHistory.push({
             role: 'user',
             content: 'Continue. Use your tools to keep building. If all files are written and reviewed, call project_complete.'
           })
         } else {
-          // Empty response
           consecutiveEmptyResponses++
           if (consecutiveEmptyResponses >= 3) {
             this.emit('log', {
@@ -519,23 +504,21 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
           })
         }
 
-        // Check if we're done
         if (this.status === 'complete') {
           break
         }
 
-        // Trim conversation history if it gets too long (free tier token limits)
         if (this.conversationHistory.length > 40) {
           this.trimHistory()
         }
       }
 
-      if (iteration >= maxIterations) {
+      if (iteration >= maxIterations && this.status !== 'complete') {
         this.emit('log', {
           type: 'warning',
           message: 'Morpheus reached iteration limit. Wrapping up.'
         })
-        if (this.builtFiles.length > 0 && this.status !== 'complete') {
+        if (this.builtFiles.length > 0) {
           this.setStatus('complete')
           this.emit('complete', {
             summary: `Built ${this.builtFiles.length} files before reaching iteration limit.`,
@@ -558,14 +541,11 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     }
   }
 
-  // ---- Trim conversation history to stay within token limits ----
   trimHistory() {
-    // Keep system message, first user message, and last 20 messages
     const system = this.conversationHistory[0]
     const firstUser = this.conversationHistory[1]
     const recent = this.conversationHistory.slice(-20)
     
-    // Add a summary of what's been built so far
     const summaryMessage = {
       role: 'user',
       content: `[CONTEXT SUMMARY] You have already built these files: ${this.builtFiles.join(', ')}. You have reviewed: ${this.reviewedFiles.join(', ')}. Continue building the remaining files from the plan. Build order was: ${this.buildOrder.join(' → ')}`
@@ -579,7 +559,6 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     })
   }
 
-  // ---- Handle a single tool call from Hermes ----
   async handleToolCall(toolCall) {
     const { name, arguments: argsStr } = toolCall.function
     let args
@@ -587,9 +566,7 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     try {
       args = JSON.parse(argsStr)
     } catch (e) {
-      // Sometimes the model returns malformed JSON — try to clean it
       try {
-        // Attempt to fix common JSON issues
         const cleaned = argsStr
           .replace(/\n/g, '\\n')
           .replace(/\r/g, '\\r')
@@ -634,8 +611,6 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     }
   }
 
-  // ---- Tool Handlers ----
-
   async handleAnalyze(toolCallId, args) {
     this.emit('log', {
       type: 'analyzing',
@@ -656,7 +631,6 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     this.plan = args
     this.setStatus('planning')
 
-    const componentNames = args.components.map(c => c.filename)
     this.buildOrder = args.components
       .sort((a, b) => a.priority - b.priority)
       .map(c => c.filename)
@@ -673,7 +647,6 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
       build_order: this.buildOrder
     })
 
-    // Log each planned component
     for (const comp of args.components) {
       this.emit('log', {
         type: 'planning',
@@ -695,7 +668,6 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     this.setStatus('building')
     this.currentFile = args.filename
 
-    // Store the file
     this.files[args.filename] = {
       code: args.code,
       description: args.description
@@ -718,7 +690,6 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
       filesTotal: this.buildOrder.length || this.builtFiles.length
     })
 
-    // Calculate progress
     const total = Math.max(this.buildOrder.length, this.builtFiles.length)
     const progress = Math.round((this.builtFiles.length / total) * 100)
     this.emit('progress', { percent: progress })
@@ -765,17 +736,14 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
       }
     }
 
-    // Determine next instruction
     let nextInstruction = ''
     if (args.verdict === 'fix_needed' || args.verdict === 'rewrite') {
       nextInstruction = `Fix the issues in ${args.filename} using fix_file.`
     } else {
-      // Find next unbuilt file
       const nextFile = this.buildOrder.find(f => !this.builtFiles.includes(f))
       if (nextFile) {
         nextInstruction = `Good. Now write the next file: ${nextFile} using write_file.`
       } else {
-        // Check if all files are reviewed
         const unreviewed = this.builtFiles.filter(f => !this.reviewedFiles.includes(f))
         if (unreviewed.length > 0) {
           nextInstruction = `All files written. Review remaining: ${unreviewed.join(', ')}`
@@ -801,7 +769,6 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
   async handleFixFile(toolCallId, args) {
     this.setStatus('fixing')
 
-    // Update the file
     this.files[args.filename] = {
       ...this.files[args.filename],
       code: args.code
@@ -818,12 +785,10 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
       fixes: args.fixes_applied
     })
 
-    // Mark as reviewed after fix
     if (!this.reviewedFiles.includes(args.filename)) {
       this.reviewedFiles.push(args.filename)
     }
 
-    // Find what to do next
     const nextFile = this.buildOrder.find(f => !this.builtFiles.includes(f))
     let nextInstruction = nextFile
       ? `Fix applied. Now write the next file: ${nextFile} using write_file.`
@@ -866,13 +831,11 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     this.isRunning = false
   }
 
-  // ---- Status management ----
   setStatus(status) {
     this.status = status
     this.emit('status_change', { status })
   }
 
-  // ---- Stop the agent ----
   stop() {
     this.isRunning = false
     if (this.abortController) {
@@ -882,12 +845,10 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     this.emit('log', { type: 'error', message: 'Morpheus stopped by user.' })
   }
 
-  // ---- Get all generated files ----
   getFiles() {
     return { ...this.files }
   }
 
-  // ---- Get current status ----
   getStatus() {
     return this.status
   }
