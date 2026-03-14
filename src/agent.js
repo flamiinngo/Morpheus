@@ -284,14 +284,16 @@ export class MorpheusAgent {
           throw new Error('Empty response from model')
         }
 
-                const message = result.choices[0].message
+        const message = result.choices[0].message
 
-        // Parse Hermes function calls — supports both <tool_call> tags and raw JSON
         if (message.content) {
           const toolCalls = []
           const content = message.content.trim()
 
-          // Method 1: Look for <tool_call> tags
+          // Known tool names for matching
+          const toolNames = ['analyze_screenshot', 'create_architecture_plan', 'write_file', 'review_file', 'fix_file', 'project_complete']
+
+          // Method 1: <tool_call> tags
           const tagRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g
           let match
           while ((match = tagRegex.exec(content)) !== null) {
@@ -312,10 +314,9 @@ export class MorpheusAgent {
             }
           }
 
-          // Method 2: If no tagged calls found, try raw JSON with "name" and "arguments"
+          // Method 2: Raw JSON {"name":"tool","arguments":{...}}
           if (toolCalls.length === 0) {
             try {
-              // Try parsing the whole content as JSON
               const parsed = JSON.parse(content)
               if (parsed.name && typeof parsed.name === 'string') {
                 toolCalls.push({
@@ -328,24 +329,45 @@ export class MorpheusAgent {
                 })
               }
             } catch (e) {
-              // Not valid JSON — try to find JSON object in the text
-              const jsonRegex = /\{[\s\S]*"name"\s*:\s*"(\w+)"[\s\S]*"arguments"\s*:\s*\{[\s\S]*\}[\s\S]*\}/g
-              let jsonMatch
-              while ((jsonMatch = jsonRegex.exec(content)) !== null) {
-                try {
-                  const parsed = JSON.parse(jsonMatch[0])
-                  if (parsed.name) {
-                    toolCalls.push({
-                      id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                      type: 'function',
-                      function: {
-                        name: parsed.name,
-                        arguments: JSON.stringify(parsed.arguments || {})
-                      }
-                    })
+              // Not raw JSON, try other methods
+            }
+          }
+
+          // Method 3: toolname{...} or toolname {...} format (e.g. write_file{"filename":...})
+          if (toolCalls.length === 0) {
+            for (const toolName of toolNames) {
+              const toolIdx = content.indexOf(toolName)
+              if (toolIdx !== -1) {
+                const afterName = content.substring(toolIdx + toolName.length).trim()
+                if (afterName.startsWith('{')) {
+                  // Find the matching closing brace
+                  let braceCount = 0
+                  let endIdx = -1
+                  for (let i = 0; i < afterName.length; i++) {
+                    if (afterName[i] === '{') braceCount++
+                    if (afterName[i] === '}') braceCount--
+                    if (braceCount === 0) {
+                      endIdx = i + 1
+                      break
+                    }
                   }
-                } catch (e2) {
-                  console.warn('Failed to parse embedded JSON tool call')
+                  if (endIdx > 0) {
+                    try {
+                      const argsJson = afterName.substring(0, endIdx)
+                      const parsed = JSON.parse(argsJson)
+                      toolCalls.push({
+                        id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                        type: 'function',
+                        function: {
+                          name: toolName,
+                          arguments: JSON.stringify(parsed)
+                        }
+                      })
+                      break
+                    } catch (e) {
+                      console.warn(`Failed to parse ${toolName} args`)
+                    }
+                  }
                 }
               }
             }
@@ -358,7 +380,6 @@ export class MorpheusAgent {
         }
 
         return message
-
       } catch (error) {
         if (error.name === 'AbortError') throw error
         retries--
