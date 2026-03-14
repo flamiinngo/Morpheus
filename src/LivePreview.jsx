@@ -10,7 +10,6 @@ import React, { useState, useMemo } from 'react'
 import {
   SandpackProvider,
   SandpackPreview,
-  SandpackLayout,
 } from '@codesandbox/sandpack-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -20,7 +19,6 @@ import {
   RefreshCw,
   Maximize2,
   Minimize2,
-  ExternalLink,
 } from 'lucide-react'
 import { formatForSandpack } from './builder.js'
 
@@ -54,7 +52,10 @@ export default function LivePreview({
 
   // Viewport config
   const currentViewport = VIEWPORTS[viewport]
-  const ViewportIcon = currentViewport.icon
+
+  // Build the font URL
+  const fontFamily = designSystem.font_family || 'Inter'
+  const fontUrl = `https://fonts.googleapis.com/css2?family=${fontFamily.replace(/\s+/g, '+')}:wght@300;400;500;600;700;800&display=swap`
 
   if (!canPreview) {
     return (
@@ -180,13 +181,9 @@ export default function LivePreview({
             }}
             options={{
               externalResources: [
-                'https://cdn.tailwindcss.com',
-                designSystem.font_family
-                  ? `https://fonts.googleapis.com/css2?family=${designSystem.font_family.replace(
-                      /\s+/g,
-                      '+'
-                    )}:wght@300;400;500;600;700;800&display=swap`
-                  : 'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap',
+                // Use the Tailwind CDN play script — more reliable than the CSS-only CDN
+                'https://unpkg.com/@tailwindcss/browser@4',
+                fontUrl,
               ],
               classes: {
                 'sp-wrapper': 'morpheus-sandpack-wrapper',
