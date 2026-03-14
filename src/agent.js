@@ -284,28 +284,73 @@ export class MorpheusAgent {
           throw new Error('Empty response from model')
         }
 
-        const message = result.choices[0].message
+                const message = result.choices[0].message
 
-        // Parse native Hermes <tool_call> format into standard tool_calls structure
-        if (message.content && message.content.includes('<tool_call>')) {
+        // Parse Hermes function calls — supports both <tool_call> tags and raw JSON
+        if (message.content) {
           const toolCalls = []
-          const regex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g
+          const content = message.content.trim()
+
+          // Method 1: Look for <tool_call> tags
+          const tagRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g
           let match
-          while ((match = regex.exec(message.content)) !== null) {
+          while ((match = tagRegex.exec(content)) !== null) {
             try {
               const parsed = JSON.parse(match[1].trim())
-              toolCalls.push({
-                id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                type: 'function',
-                function: {
-                  name: parsed.name,
-                  arguments: JSON.stringify(parsed.arguments)
-                }
-              })
+              if (parsed.name) {
+                toolCalls.push({
+                  id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                  type: 'function',
+                  function: {
+                    name: parsed.name,
+                    arguments: JSON.stringify(parsed.arguments || {})
+                  }
+                })
+              }
             } catch (e) {
-              console.warn('Failed to parse tool call:', match[1])
+              console.warn('Failed to parse tagged tool call:', match[1])
             }
           }
+
+          // Method 2: If no tagged calls found, try raw JSON with "name" and "arguments"
+          if (toolCalls.length === 0) {
+            try {
+              // Try parsing the whole content as JSON
+              const parsed = JSON.parse(content)
+              if (parsed.name && typeof parsed.name === 'string') {
+                toolCalls.push({
+                  id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                  type: 'function',
+                  function: {
+                    name: parsed.name,
+                    arguments: JSON.stringify(parsed.arguments || {})
+                  }
+                })
+              }
+            } catch (e) {
+              // Not valid JSON — try to find JSON object in the text
+              const jsonRegex = /\{[\s\S]*"name"\s*:\s*"(\w+)"[\s\S]*"arguments"\s*:\s*\{[\s\S]*\}[\s\S]*\}/g
+              let jsonMatch
+              while ((jsonMatch = jsonRegex.exec(content)) !== null) {
+                try {
+                  const parsed = JSON.parse(jsonMatch[0])
+                  if (parsed.name) {
+                    toolCalls.push({
+                      id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                      type: 'function',
+                      function: {
+                        name: parsed.name,
+                        arguments: JSON.stringify(parsed.arguments || {})
+                      }
+                    })
+                  }
+                } catch (e2) {
+                  console.warn('Failed to parse embedded JSON tool call')
+                }
+              }
+            }
+          }
+
           if (toolCalls.length > 0) {
             message.tool_calls = toolCalls
             message.content = null
