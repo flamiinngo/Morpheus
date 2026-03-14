@@ -569,6 +569,7 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
         }
 
         let response
+        this.emit('log', { type: 'thinking', message: `Agent iteration ${iteration} — calling Hermes 3 405B...` })
         try {
           response = await this.callHermes(
             this.conversationHistory,
