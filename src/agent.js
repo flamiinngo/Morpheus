@@ -1,0 +1,894 @@
+// ============================================
+// MORPHEUS AGENT — The Autonomous Build Brain
+// Powered by Hermes via OpenRouter (FREE TIER)
+// 
+// This is NOT a wrapper. This is a real agent
+// loop with planning, execution, self-review,
+// and self-correction. Hermes decides what to
+// build, when to review, and when it's done.
+// ============================================
+
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
+
+// FREE models — no payment required
+const HERMES_MODEL = 'nousresearch/hermes-3-llama-3.1-405b:free'
+const VISION_MODEL = 'google/gemini-2.0-flash-001:free'
+
+// ---- Tool Definitions for Hermes Function Calling ----
+// These are the tools Morpheus can use autonomously
+
+const AGENT_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'analyze_screenshot',
+      description: 'Analyze a screenshot to identify UI components, layout patterns, design system, colors, typography, and overall architecture. Returns a structured analysis.',
+      parameters: {
+        type: 'object',
+        properties: {
+          image_description: {
+            type: 'string',
+            description: 'Description of what the vision model saw in the screenshot'
+          }
+        },
+        required: ['image_description']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_architecture_plan',
+      description: 'Create a complete architecture plan for the project including file list, component hierarchy, dependencies between files, and build order.',
+      parameters: {
+        type: 'object',
+        properties: {
+          components: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                filename: { type: 'string' },
+                description: { type: 'string' },
+                dependencies: {
+                  type: 'array',
+                  items: { type: 'string' }
+                },
+                priority: { type: 'number' }
+              },
+              required: ['name', 'filename', 'description', 'dependencies', 'priority']
+            },
+            description: 'List of components to build, ordered by priority'
+          },
+          design_system: {
+            type: 'object',
+            properties: {
+              primary_color: { type: 'string' },
+              secondary_color: { type: 'string' },
+              background_color: { type: 'string' },
+              text_color: { type: 'string' },
+              font_family: { type: 'string' },
+              border_radius: { type: 'string' },
+              spacing_unit: { type: 'string' }
+            },
+            description: 'Extracted design system tokens'
+          },
+          layout_type: {
+            type: 'string',
+            enum: ['single-page', 'multi-section', 'dashboard', 'landing-page', 'app-interface'],
+            description: 'Overall layout pattern detected'
+          }
+        },
+        required: ['components', 'design_system', 'layout_type']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'write_file',
+      description: 'Write a complete code file for the project. The code must be production-quality, properly formatted, and match the design system.',
+      parameters: {
+        type: 'object',
+        properties: {
+          filename: {
+            type: 'string',
+            description: 'The filename including path, e.g. "App.jsx" or "components/Navbar.jsx"'
+          },
+          code: {
+            type: 'string',
+            description: 'The complete file contents — production-quality code'
+          },
+          description: {
+            type: 'string',
+            description: 'Brief description of what this file does'
+          }
+        },
+        required: ['filename', 'code', 'description']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'review_file',
+      description: 'Review a previously written file for bugs, missing imports, style inconsistencies, or logical errors. Decide whether to fix it or move on.',
+      parameters: {
+        type: 'object',
+        properties: {
+          filename: {
+            type: 'string',
+            description: 'The filename to review'
+          },
+          issues: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                severity: { type: 'string', enum: ['critical', 'warning', 'suggestion'] },
+                description: { type: 'string' },
+                fix: { type: 'string' }
+              }
+            },
+            description: 'List of issues found'
+          },
+          verdict: {
+            type: 'string',
+            enum: ['pass', 'fix_needed', 'rewrite'],
+            description: 'Whether the file passes review'
+          }
+        },
+        required: ['filename', 'issues', 'verdict']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fix_file',
+      description: 'Fix issues found during review by rewriting part or all of a file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          filename: {
+            type: 'string',
+            description: 'The filename to fix'
+          },
+          code: {
+            type: 'string',
+            description: 'The corrected complete file contents'
+          },
+          fixes_applied: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of fixes that were applied'
+          }
+        },
+        required: ['filename', 'code', 'fixes_applied']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'project_complete',
+      description: 'Signal that the project is complete. Only call this when ALL files have been written and reviewed.',
+      parameters: {
+        type: 'object',
+        properties: {
+          summary: {
+            type: 'string',
+            description: 'A summary of the completed project'
+          },
+          file_count: {
+            type: 'number',
+            description: 'Total number of files written'
+          },
+          tech_stack: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Technologies used in the project'
+          }
+        },
+        required: ['summary', 'file_count', 'tech_stack']
+      }
+    }
+  }
+]
+
+
+// ============================================
+// MorpheusAgent Class
+// The autonomous build loop
+// ============================================
+
+export class MorpheusAgent {
+  constructor(apiKey, onEvent) {
+    this.apiKey = apiKey
+    this.onEvent = onEvent // callback for UI updates
+    this.conversationHistory = []
+    this.files = {} // { filename: { code, description } }
+    this.plan = null
+    this.status = 'idle' // idle | analyzing | planning | building | reviewing | fixing | complete | error
+    this.isRunning = false
+    this.currentFile = null
+    this.buildOrder = []
+    this.builtFiles = []
+    this.reviewedFiles = []
+    this.abortController = null
+  }
+
+  // ---- Emit events to the UI ----
+  emit(type, data) {
+    if (this.onEvent) {
+      this.onEvent({ type, data, timestamp: Date.now() })
+    }
+  }
+
+  // ---- Call OpenRouter API ----
+  async callHermes(messages, tools = null, model = HERMES_MODEL) {
+    const body = {
+      model,
+      messages,
+      temperature: 0.3,
+      max_tokens: 8192,
+    }
+
+    if (tools) {
+      body.tools = tools
+      body.tool_choice = 'auto'
+    }
+
+    // Retry logic for free tier rate limits
+    let retries = 3
+    let delay = 2000
+
+    while (retries > 0) {
+      try {
+        const response = await fetch(OPENROUTER_URL, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': window.location.origin,
+            'X-Title': 'Morpheus Agent'
+          },
+          body: JSON.stringify(body),
+          signal: this.abortController?.signal
+        })
+
+        // Rate limited — wait and retry
+        if (response.status === 429) {
+          retries--
+          this.emit('log', {
+            type: 'warning',
+            message: `Rate limited. Waiting ${delay / 1000}s before retry... (${retries} retries left)`
+          })
+          await new Promise(r => setTimeout(r, delay))
+          delay *= 2 // exponential backoff
+          continue
+        }
+
+        if (!response.ok) {
+          const err = await response.text()
+          throw new Error(`API Error ${response.status}: ${err}`)
+        }
+
+        const result = await response.json()
+
+        // Check if the response has choices
+        if (!result.choices || result.choices.length === 0) {
+          throw new Error('Empty response from model')
+        }
+
+        return result.choices[0].message
+
+      } catch (error) {
+        if (error.name === 'AbortError') throw error
+
+        retries--
+        if (retries === 0) throw error
+
+        this.emit('log', {
+          type: 'warning',
+          message: `Request failed: ${error.message}. Retrying in ${delay / 1000}s...`
+        })
+        await new Promise(r => setTimeout(r, delay))
+        delay *= 2
+      }
+    }
+  }
+
+  // ---- Analyze screenshot with vision model ----
+  async analyzeScreenshot(imageBase64) {
+    this.setStatus('analyzing')
+    this.emit('log', { 
+      type: 'analyzing', 
+      message: 'Morpheus is opening its eye... analyzing the screenshot' 
+    })
+
+    const visionMessages = [
+      {
+        role: 'system',
+        content: `You are Morpheus, an expert UI/UX analyst. You are looking at a screenshot of a web application or website. 
+
+Provide an EXTREMELY detailed analysis including:
+1. Every visible UI component (navbar, hero, cards, buttons, forms, footers, sidebars, modals, etc.)
+2. The layout system (grid, flexbox patterns, column counts, spacing)
+3. Design system tokens (colors — be specific with hex guesses, typography — font family and sizes, border radius patterns, shadow styles)
+4. Content structure (headings, body text, CTAs, images, icons)
+5. Interactive elements (buttons, links, dropdowns, inputs)
+6. Overall design style (minimal, corporate, playful, dark mode, glassmorphism, etc.)
+7. Responsive hints (does it look mobile-first? desktop-first?)
+
+Be precise. Be thorough. A developer will use your analysis to rebuild this EXACTLY.`
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image_url',
+            image_url: {
+              url: `data:image/png;base64,${imageBase64}`
+            }
+          },
+          {
+            type: 'text',
+            text: 'Analyze this screenshot in detail. Identify every component, the design system, layout patterns, and anything a developer would need to rebuild it pixel-perfect.'
+          }
+        ]
+      }
+    ]
+
+    const visionResponse = await this.callHermes(visionMessages, null, VISION_MODEL)
+    
+    this.emit('log', {
+      type: 'analyzing',
+      message: 'Screenshot analyzed. Morpheus sees everything.'
+    })
+
+    this.emit('vision_result', {
+      analysis: visionResponse.content
+    })
+
+    return visionResponse.content
+  }
+
+  // ---- Main autonomous agent loop ----
+  async run(imageBase64) {
+    if (this.isRunning) return
+    this.isRunning = true
+    this.abortController = new AbortController()
+    this.files = {}
+    this.builtFiles = []
+    this.reviewedFiles = []
+    this.conversationHistory = []
+
+    try {
+      // PHASE 1: Analyze the screenshot
+      const analysis = await this.analyzeScreenshot(imageBase64)
+
+      // PHASE 2: Plan the architecture
+      this.setStatus('planning')
+      this.emit('log', {
+        type: 'analyzing',
+        message: 'Morpheus is thinking... planning the architecture'
+      })
+
+      // Initialize conversation with the analysis
+      this.conversationHistory = [
+        {
+          role: 'system',
+          content: `You are Morpheus, an autonomous AI architect agent. You have just analyzed a screenshot of a web application and now you must rebuild it from scratch.
+
+YOUR CAPABILITIES (tools):
+- create_architecture_plan: Plan the full project structure
+- write_file: Write a complete code file
+- review_file: Review a file you wrote for bugs/issues
+- fix_file: Fix issues found during review
+- project_complete: Signal when the project is fully done
+
+YOUR RULES:
+1. ALWAYS start by calling create_architecture_plan based on the analysis
+2. Write files ONE AT A TIME in dependency order (shared utilities first, then components, then the main App)
+3. After writing every file, REVIEW it with review_file
+4. If review finds critical issues, call fix_file immediately
+5. Only call project_complete when ALL planned files are written AND reviewed
+6. Use React + Tailwind CSS for all components
+7. Write COMPLETE files — no placeholders, no TODOs, no "add more here"
+8. Match the original design as closely as possible using the analysis
+9. Every component must be properly exported and imported
+10. Include all necessary imports at the top of each file
+
+TECH STACK:
+- React 18 (functional components, hooks)
+- Tailwind CSS (utility classes, no separate CSS files needed)
+- Lucide React for icons
+- No routing needed — single page app
+- Export everything from component files as named or default exports
+
+DESIGN APPROACH:
+- Use Tailwind utility classes inline
+- Create a cohesive design system based on the analysis
+- Ensure responsive design with Tailwind breakpoints
+- Add hover states, transitions, and micro-interactions
+- Use semantic HTML elements
+
+IMPORTANT: You must call ONE tool at a time. After each tool call, wait for the result before calling the next tool.
+
+You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
+        },
+        {
+          role: 'user',
+          content: `Here is the detailed analysis of the screenshot I want you to rebuild:\n\n${analysis}\n\nBegin by creating the architecture plan, then build every file one by one. Start now.`
+        }
+      ]
+
+      // PHASE 3: Enter the autonomous loop
+      let maxIterations = 50 // safety limit
+      let iteration = 0
+      let consecutiveEmptyResponses = 0
+
+      while (this.isRunning && iteration < maxIterations) {
+        iteration++
+
+        // Small delay between calls to respect free tier rate limits
+        if (iteration > 1) {
+          await new Promise(r => setTimeout(r, 1500))
+        }
+
+        let response
+        try {
+          response = await this.callHermes(
+            this.conversationHistory,
+            AGENT_TOOLS
+          )
+        } catch (error) {
+          if (error.name === 'AbortError') throw error
+          
+          this.emit('log', {
+            type: 'error',
+            message: `Agent call failed: ${error.message}`
+          })
+          
+          // If we have files built, mark as complete anyway
+          if (this.builtFiles.length > 0) {
+            this.emit('log', {
+              type: 'warning',
+              message: `Morpheus completed ${this.builtFiles.length} files before the error. Wrapping up.`
+            })
+            this.setStatus('complete')
+            this.emit('complete', {
+              summary: `Built ${this.builtFiles.length} files before encountering an error.`,
+              file_count: this.builtFiles.length,
+              tech_stack: ['React', 'Tailwind CSS'],
+              files: { ...this.files }
+            })
+            break
+          }
+          throw error
+        }
+
+        // Add assistant response to history
+        this.conversationHistory.push(response)
+
+        // Check if Hermes wants to use tools
+        if (response.tool_calls && response.tool_calls.length > 0) {
+          consecutiveEmptyResponses = 0
+          for (const toolCall of response.tool_calls) {
+            await this.handleToolCall(toolCall)
+          }
+        } else if (response.content) {
+          consecutiveEmptyResponses = 0
+          // Hermes is thinking out loud — log it
+          this.emit('log', {
+            type: 'thinking',
+            message: response.content.slice(0, 200)
+          })
+          
+          // Push a prompt to keep going
+          this.conversationHistory.push({
+            role: 'user',
+            content: 'Continue. Use your tools to keep building. If all files are written and reviewed, call project_complete.'
+          })
+        } else {
+          // Empty response
+          consecutiveEmptyResponses++
+          if (consecutiveEmptyResponses >= 3) {
+            this.emit('log', {
+              type: 'warning',
+              message: 'Morpheus went quiet. Wrapping up with what we have.'
+            })
+            
+            if (this.builtFiles.length > 0) {
+              this.setStatus('complete')
+              this.emit('complete', {
+                summary: `Built ${this.builtFiles.length} files.`,
+                file_count: this.builtFiles.length,
+                tech_stack: ['React', 'Tailwind CSS'],
+                files: { ...this.files }
+              })
+            }
+            break
+          }
+
+          this.conversationHistory.push({
+            role: 'user',
+            content: 'You must call a tool now. Use write_file to write the next file, or call project_complete if done.'
+          })
+        }
+
+        // Check if we're done
+        if (this.status === 'complete') {
+          break
+        }
+
+        // Trim conversation history if it gets too long (free tier token limits)
+        if (this.conversationHistory.length > 40) {
+          this.trimHistory()
+        }
+      }
+
+      if (iteration >= maxIterations) {
+        this.emit('log', {
+          type: 'warning',
+          message: 'Morpheus reached iteration limit. Wrapping up.'
+        })
+        if (this.builtFiles.length > 0 && this.status !== 'complete') {
+          this.setStatus('complete')
+          this.emit('complete', {
+            summary: `Built ${this.builtFiles.length} files before reaching iteration limit.`,
+            file_count: this.builtFiles.length,
+            tech_stack: ['React', 'Tailwind CSS'],
+            files: { ...this.files }
+          })
+        }
+      }
+
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        this.emit('log', { type: 'error', message: 'Morpheus was interrupted.' })
+      } else {
+        this.emit('log', { type: 'error', message: `Error: ${error.message}` })
+        this.setStatus('error')
+      }
+    } finally {
+      this.isRunning = false
+    }
+  }
+
+  // ---- Trim conversation history to stay within token limits ----
+  trimHistory() {
+    // Keep system message, first user message, and last 20 messages
+    const system = this.conversationHistory[0]
+    const firstUser = this.conversationHistory[1]
+    const recent = this.conversationHistory.slice(-20)
+    
+    // Add a summary of what's been built so far
+    const summaryMessage = {
+      role: 'user',
+      content: `[CONTEXT SUMMARY] You have already built these files: ${this.builtFiles.join(', ')}. You have reviewed: ${this.reviewedFiles.join(', ')}. Continue building the remaining files from the plan. Build order was: ${this.buildOrder.join(' → ')}`
+    }
+
+    this.conversationHistory = [system, firstUser, summaryMessage, ...recent]
+    
+    this.emit('log', {
+      type: 'thinking',
+      message: 'Morpheus compressed its memory to stay focused.'
+    })
+  }
+
+  // ---- Handle a single tool call from Hermes ----
+  async handleToolCall(toolCall) {
+    const { name, arguments: argsStr } = toolCall.function
+    let args
+
+    try {
+      args = JSON.parse(argsStr)
+    } catch (e) {
+      // Sometimes the model returns malformed JSON — try to clean it
+      try {
+        // Attempt to fix common JSON issues
+        const cleaned = argsStr
+          .replace(/\n/g, '\\n')
+          .replace(/\r/g, '\\r')
+          .replace(/\t/g, '\\t')
+        args = JSON.parse(cleaned)
+      } catch (e2) {
+        this.emit('log', { type: 'error', message: `Failed to parse tool args for ${name}. Asking Hermes to retry...` })
+        this.conversationHistory.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: JSON.stringify({ error: 'Invalid JSON in arguments. Please try again with valid JSON. Make sure all strings are properly escaped.' })
+        })
+        return
+      }
+    }
+
+    switch (name) {
+      case 'analyze_screenshot':
+        await this.handleAnalyze(toolCall.id, args)
+        break
+      case 'create_architecture_plan':
+        await this.handlePlan(toolCall.id, args)
+        break
+      case 'write_file':
+        await this.handleWriteFile(toolCall.id, args)
+        break
+      case 'review_file':
+        await this.handleReviewFile(toolCall.id, args)
+        break
+      case 'fix_file':
+        await this.handleFixFile(toolCall.id, args)
+        break
+      case 'project_complete':
+        await this.handleComplete(toolCall.id, args)
+        break
+      default:
+        this.conversationHistory.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: JSON.stringify({ error: `Unknown tool: ${name}` })
+        })
+    }
+  }
+
+  // ---- Tool Handlers ----
+
+  async handleAnalyze(toolCallId, args) {
+    this.emit('log', {
+      type: 'analyzing',
+      message: `Vision analysis: ${args.image_description?.slice(0, 150)}...`
+    })
+
+    this.conversationHistory.push({
+      role: 'tool',
+      tool_call_id: toolCallId,
+      content: JSON.stringify({ 
+        status: 'success',
+        message: 'Screenshot analysis complete. Now create the architecture plan.' 
+      })
+    })
+  }
+
+  async handlePlan(toolCallId, args) {
+    this.plan = args
+    this.setStatus('planning')
+
+    const componentNames = args.components.map(c => c.filename)
+    this.buildOrder = args.components
+      .sort((a, b) => a.priority - b.priority)
+      .map(c => c.filename)
+
+    this.emit('log', {
+      type: 'analyzing',
+      message: `Architecture planned: ${args.layout_type} layout with ${args.components.length} components`
+    })
+
+    this.emit('plan', {
+      components: args.components,
+      design_system: args.design_system,
+      layout_type: args.layout_type,
+      build_order: this.buildOrder
+    })
+
+    // Log each planned component
+    for (const comp of args.components) {
+      this.emit('log', {
+        type: 'planning',
+        message: `📐 Planned: ${comp.filename} — ${comp.description}`
+      })
+    }
+
+    this.conversationHistory.push({
+      role: 'tool',
+      tool_call_id: toolCallId,
+      content: JSON.stringify({
+        status: 'success',
+        message: `Architecture plan saved. ${args.components.length} files planned. Build order: ${this.buildOrder.join(' → ')}. Now start writing files in order, beginning with: ${this.buildOrder[0]}. Call write_file for each one.`
+      })
+    })
+  }
+
+  async handleWriteFile(toolCallId, args) {
+    this.setStatus('building')
+    this.currentFile = args.filename
+
+    // Store the file
+    this.files[args.filename] = {
+      code: args.code,
+      description: args.description
+    }
+
+    if (!this.builtFiles.includes(args.filename)) {
+      this.builtFiles.push(args.filename)
+    }
+
+    this.emit('log', {
+      type: 'building',
+      message: `✍️ Writing ${args.filename} — ${args.description}`
+    })
+
+    this.emit('file_written', {
+      filename: args.filename,
+      code: args.code,
+      description: args.description,
+      filesComplete: this.builtFiles.length,
+      filesTotal: this.buildOrder.length || this.builtFiles.length
+    })
+
+    // Calculate progress
+    const total = Math.max(this.buildOrder.length, this.builtFiles.length)
+    const progress = Math.round((this.builtFiles.length / total) * 100)
+    this.emit('progress', { percent: progress })
+
+    this.conversationHistory.push({
+      role: 'tool',
+      tool_call_id: toolCallId,
+      content: JSON.stringify({
+        status: 'success',
+        message: `File ${args.filename} written successfully (${this.builtFiles.length}/${this.buildOrder.length || '?'}). Now review this file with review_file, then continue to the next file.`
+      })
+    })
+  }
+
+  async handleReviewFile(toolCallId, args) {
+    this.setStatus('reviewing')
+
+    const issueCount = args.issues?.length || 0
+    const criticalCount = args.issues?.filter(i => i.severity === 'critical').length || 0
+
+    this.emit('log', {
+      type: 'reviewing',
+      message: `🔍 Reviewing ${args.filename}: ${issueCount} issue(s) found, verdict: ${args.verdict}`
+    })
+
+    if (args.issues && args.issues.length > 0) {
+      for (const issue of args.issues) {
+        this.emit('log', {
+          type: issue.severity === 'critical' ? 'error' : 'reviewing',
+          message: `  ${issue.severity === 'critical' ? '🔴' : issue.severity === 'warning' ? '🟡' : '💡'} ${issue.description}`
+        })
+      }
+    }
+
+    this.emit('file_reviewed', {
+      filename: args.filename,
+      issues: args.issues,
+      verdict: args.verdict
+    })
+
+    if (args.verdict === 'pass') {
+      if (!this.reviewedFiles.includes(args.filename)) {
+        this.reviewedFiles.push(args.filename)
+      }
+    }
+
+    // Determine next instruction
+    let nextInstruction = ''
+    if (args.verdict === 'fix_needed' || args.verdict === 'rewrite') {
+      nextInstruction = `Fix the issues in ${args.filename} using fix_file.`
+    } else {
+      // Find next unbuilt file
+      const nextFile = this.buildOrder.find(f => !this.builtFiles.includes(f))
+      if (nextFile) {
+        nextInstruction = `Good. Now write the next file: ${nextFile} using write_file.`
+      } else {
+        // Check if all files are reviewed
+        const unreviewed = this.builtFiles.filter(f => !this.reviewedFiles.includes(f))
+        if (unreviewed.length > 0) {
+          nextInstruction = `All files written. Review remaining: ${unreviewed.join(', ')}`
+        } else {
+          nextInstruction = 'All files written and reviewed. Call project_complete now.'
+        }
+      }
+    }
+
+    this.conversationHistory.push({
+      role: 'tool',
+      tool_call_id: toolCallId,
+      content: JSON.stringify({
+        status: 'success',
+        verdict: args.verdict,
+        issues_count: issueCount,
+        critical_count: criticalCount,
+        message: nextInstruction
+      })
+    })
+  }
+
+  async handleFixFile(toolCallId, args) {
+    this.setStatus('fixing')
+
+    // Update the file
+    this.files[args.filename] = {
+      ...this.files[args.filename],
+      code: args.code
+    }
+
+    this.emit('log', {
+      type: 'building',
+      message: `🔧 Fixed ${args.filename}: ${args.fixes_applied.join(', ')}`
+    })
+
+    this.emit('file_fixed', {
+      filename: args.filename,
+      code: args.code,
+      fixes: args.fixes_applied
+    })
+
+    // Mark as reviewed after fix
+    if (!this.reviewedFiles.includes(args.filename)) {
+      this.reviewedFiles.push(args.filename)
+    }
+
+    // Find what to do next
+    const nextFile = this.buildOrder.find(f => !this.builtFiles.includes(f))
+    let nextInstruction = nextFile
+      ? `Fix applied. Now write the next file: ${nextFile} using write_file.`
+      : 'Fix applied. All files are written and reviewed. Call project_complete now.'
+
+    this.conversationHistory.push({
+      role: 'tool',
+      tool_call_id: toolCallId,
+      content: JSON.stringify({
+        status: 'success',
+        message: nextInstruction
+      })
+    })
+  }
+
+  async handleComplete(toolCallId, args) {
+    this.setStatus('complete')
+
+    this.emit('log', {
+      type: 'complete',
+      message: `✅ Project complete! ${args.file_count} files built. ${args.summary}`
+    })
+
+    this.emit('complete', {
+      summary: args.summary,
+      file_count: args.file_count,
+      tech_stack: args.tech_stack,
+      files: { ...this.files }
+    })
+
+    this.conversationHistory.push({
+      role: 'tool',
+      tool_call_id: toolCallId,
+      content: JSON.stringify({
+        status: 'success',
+        message: 'Project marked as complete. Great work, Morpheus.'
+      })
+    })
+
+    this.isRunning = false
+  }
+
+  // ---- Status management ----
+  setStatus(status) {
+    this.status = status
+    this.emit('status_change', { status })
+  }
+
+  // ---- Stop the agent ----
+  stop() {
+    this.isRunning = false
+    if (this.abortController) {
+      this.abortController.abort()
+    }
+    this.setStatus('idle')
+    this.emit('log', { type: 'error', message: 'Morpheus stopped by user.' })
+  }
+
+  // ---- Get all generated files ----
+  getFiles() {
+    return { ...this.files }
+  }
+
+  // ---- Get current status ----
+  getStatus() {
+    return this.status
+  }
+}
