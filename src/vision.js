@@ -3,12 +3,10 @@
 // 
 // Handles image upload, conversion, resizing,
 // and preparation for the vision model.
-// No mock data. Real image processing.
 // ============================================
 
 /**
  * Convert a File object to base64 string
- * Strips the data URL prefix — returns pure base64
  */
 export function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -23,11 +21,11 @@ export function fileToBase64(file) {
 }
 
 /**
- * Resize an image to fit within max dimensions
- * Vision models have token limits — large images waste tokens
- * We resize to max 1568px on longest side (optimal for most vision models)
+ * Resize and compress image aggressively
+ * Vision models don't need huge images — 1024px max is plenty
+ * We also compress to JPEG quality 0.7 to keep payload small
  */
-export function resizeImage(file, maxDimension = 1568) {
+export function resizeImage(file, maxDimension = 1024) {
   return new Promise((resolve, reject) => {
     const img = new Image()
     const url = URL.createObjectURL(file)
@@ -37,34 +35,32 @@ export function resizeImage(file, maxDimension = 1568) {
 
       let { width, height } = img
 
-      // Only resize if needed
-      if (width <= maxDimension && height <= maxDimension) {
-        // No resize needed — just convert to base64
-        fileToBase64(file).then(resolve).catch(reject)
-        return
-      }
-
       // Calculate new dimensions maintaining aspect ratio
-      const ratio = Math.min(maxDimension / width, maxDimension / height)
+      const ratio = Math.min(maxDimension / width, maxDimension / height, 1)
       const newWidth = Math.round(width * ratio)
       const newHeight = Math.round(height * ratio)
 
-      // Draw to canvas at new size
       const canvas = document.createElement('canvas')
       canvas.width = newWidth
       canvas.height = newHeight
 
       const ctx = canvas.getContext('2d')
-      
-      // High quality resize
       ctx.imageSmoothingEnabled = true
       ctx.imageSmoothingQuality = 'high'
       ctx.drawImage(img, 0, 0, newWidth, newHeight)
 
-      // Convert to base64 PNG
-      const dataUrl = canvas.toDataURL('image/png', 0.92)
+      // Use JPEG at 0.7 quality — much smaller than PNG
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.7)
       const base64 = dataUrl.split(',')[1]
-      resolve(base64)
+      
+      // Safety check — if still too large, compress more
+      if (base64.length > 500000) {
+        // Re-compress at lower quality
+        const smallerUrl = canvas.toDataURL('image/jpeg', 0.4)
+        resolve(smallerUrl.split(',')[1])
+      } else {
+        resolve(base64)
+      }
     }
 
     img.onerror = () => {
@@ -78,9 +74,8 @@ export function resizeImage(file, maxDimension = 1568) {
 
 /**
  * Create a thumbnail for display in the UI
- * Small version for the sidebar — doesn't need to be high res
  */
-export function createThumbnail(file, maxDimension = 400) {
+export function createThumbnail(file, maxDimension = 300) {
   return new Promise((resolve, reject) => {
     const img = new Image()
     const url = URL.createObjectURL(file)
@@ -89,7 +84,7 @@ export function createThumbnail(file, maxDimension = 400) {
       URL.revokeObjectURL(url)
 
       let { width, height } = img
-      const ratio = Math.min(maxDimension / width, maxDimension / height)
+      const ratio = Math.min(maxDimension / width, maxDimension / height, 1)
       const newWidth = Math.round(width * ratio)
       const newHeight = Math.round(height * ratio)
 
@@ -102,7 +97,7 @@ export function createThumbnail(file, maxDimension = 400) {
       ctx.imageSmoothingQuality = 'medium'
       ctx.drawImage(img, 0, 0, newWidth, newHeight)
 
-      resolve(canvas.toDataURL('image/png', 0.8))
+      resolve(canvas.toDataURL('image/jpeg', 0.6))
     }
 
     img.onerror = () => {
@@ -116,11 +111,10 @@ export function createThumbnail(file, maxDimension = 400) {
 
 /**
  * Validate that a file is a valid image
- * Returns { valid: boolean, error?: string }
  */
 export function validateImage(file) {
   const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']
-  const maxSize = 20 * 1024 * 1024 // 20MB
+  const maxSize = 20 * 1024 * 1024
 
   if (!file) {
     return { valid: false, error: 'No file provided' }
@@ -139,7 +133,7 @@ export function validateImage(file) {
 }
 
 /**
- * Extract image dimensions without loading the full image
+ * Get image dimensions
  */
 export function getImageDimensions(file) {
   return new Promise((resolve, reject) => {
@@ -162,7 +156,6 @@ export function getImageDimensions(file) {
 
 /**
  * Handle paste from clipboard
- * Returns a File object if an image was pasted, null otherwise
  */
 export function getImageFromClipboard(clipboardEvent) {
   const items = clipboardEvent.clipboardData?.items
@@ -179,8 +172,7 @@ export function getImageFromClipboard(clipboardEvent) {
 }
 
 /**
- * Handle image from URL — fetch and convert to base64
- * Useful for "paste URL" feature
+ * Handle image from URL
  */
 export async function fetchImageAsBase64(url) {
   try {
