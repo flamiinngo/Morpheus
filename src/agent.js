@@ -233,7 +233,6 @@ export class MorpheusAgent {
           headers: {
             'Authorization': `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json',
-            'HTTP-Referer': window.location.origin,
             'X-Title': 'Morpheus Agent'
           },
           body: JSON.stringify(body),
@@ -339,7 +338,6 @@ export class MorpheusAgent {
           headers: {
             'Authorization': 'Bearer ' + this.apiKey,
             'Content-Type': 'application/json',
-            'HTTP-Referer': window.location.origin,
             'X-Title': 'Morpheus Agent'
           },
           body: JSON.stringify(requestBody),
