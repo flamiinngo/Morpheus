@@ -1,0 +1,407 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   MORPHEUS — Global Styles
+   The visual nervous system
+   ============================================ */
+
+@layer base {
+  * {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-morpheus-deep text-morpheus-text font-sans;
+    overflow: hidden;
+  }
+}
+
+@layer components {
+
+  /* ---- Morpheus Eye ---- */
+  /* The living avatar — pure CSS, no images */
+  
+  .morpheus-eye-container {
+    @apply relative flex items-center justify-center;
+    width: 80px;
+    height: 80px;
+  }
+
+  .morpheus-eye-outer {
+    @apply absolute rounded-full;
+    width: 80px;
+    height: 80px;
+    background: conic-gradient(
+      from 0deg,
+      #7c3aed,
+      #a78bfa,
+      #6366f1,
+      #22d3ee,
+      #a78bfa,
+      #7c3aed
+    );
+    animation: eyeRotate 8s linear infinite;
+    opacity: 0.6;
+  }
+
+  .morpheus-eye-outer.active {
+    opacity: 1;
+    animation: eyeRotate 3s linear infinite;
+  }
+
+  .morpheus-eye-middle {
+    @apply absolute rounded-full bg-morpheus-deep;
+    width: 68px;
+    height: 68px;
+  }
+
+  .morpheus-eye-iris {
+    @apply absolute rounded-full;
+    width: 44px;
+    height: 44px;
+    background: radial-gradient(
+      circle at 40% 40%,
+      #c4b5fd 0%,
+      #a78bfa 30%,
+      #7c3aed 60%,
+      #4c1d95 100%
+    );
+    box-shadow: 
+      0 0 20px rgba(167, 139, 250, 0.4),
+      inset 0 0 10px rgba(0, 0, 0, 0.3);
+    transition: all 0.3s ease;
+  }
+
+  .morpheus-eye-iris.thinking {
+    animation: irisPulse 1.5s ease-in-out infinite;
+    box-shadow: 
+      0 0 30px rgba(167, 139, 250, 0.6),
+      0 0 60px rgba(124, 58, 237, 0.3),
+      inset 0 0 10px rgba(0, 0, 0, 0.3);
+  }
+
+  .morpheus-eye-iris.analyzing {
+    background: radial-gradient(
+      circle at 40% 40%,
+      #67e8f9 0%,
+      #22d3ee 30%,
+      #0891b2 60%,
+      #164e63 100%
+    );
+    box-shadow: 
+      0 0 30px rgba(34, 211, 238, 0.5),
+      0 0 60px rgba(34, 211, 238, 0.2),
+      inset 0 0 10px rgba(0, 0, 0, 0.3);
+    animation: irisPulse 1s ease-in-out infinite;
+  }
+
+  .morpheus-eye-iris.building {
+    background: radial-gradient(
+      circle at 40% 40%,
+      #86efac 0%,
+      #34d399 30%,
+      #059669 60%,
+      #064e3b 100%
+    );
+    box-shadow: 
+      0 0 30px rgba(52, 211, 153, 0.5),
+      0 0 60px rgba(52, 211, 153, 0.2),
+      inset 0 0 10px rgba(0, 0, 0, 0.3);
+    animation: irisPulse 0.8s ease-in-out infinite;
+  }
+
+  .morpheus-eye-iris.error {
+    background: radial-gradient(
+      circle at 40% 40%,
+      #fca5a5 0%,
+      #f87171 30%,
+      #dc2626 60%,
+      #7f1d1d 100%
+    );
+    box-shadow: 
+      0 0 30px rgba(248, 113, 113, 0.5),
+      inset 0 0 10px rgba(0, 0, 0, 0.3);
+  }
+
+  .morpheus-eye-iris.complete {
+    background: radial-gradient(
+      circle at 40% 40%,
+      #e9d5ff 0%,
+      #c4b5fd 30%,
+      #a78bfa 60%,
+      #7c3aed 100%
+    );
+    box-shadow: 
+      0 0 40px rgba(167, 139, 250, 0.7),
+      0 0 80px rgba(124, 58, 237, 0.3),
+      inset 0 0 15px rgba(255, 255, 255, 0.1);
+  }
+
+  .morpheus-eye-pupil {
+    @apply absolute rounded-full bg-morpheus-void;
+    width: 18px;
+    height: 18px;
+    box-shadow: inset 0 0 6px rgba(167, 139, 250, 0.3);
+    transition: all 0.15s ease;
+  }
+
+  .morpheus-eye-pupil.dilated {
+    width: 24px;
+    height: 24px;
+  }
+
+  .morpheus-eye-pupil.contracted {
+    width: 10px;
+    height: 10px;
+  }
+
+  .morpheus-eye-highlight {
+    @apply absolute rounded-full bg-white;
+    width: 6px;
+    height: 6px;
+    top: 22px;
+    left: 30px;
+    opacity: 0.8;
+  }
+
+  /* ---- Panel System ---- */
+
+  .morpheus-panel {
+    @apply bg-morpheus-panel border border-morpheus-border rounded-xl;
+    backdrop-filter: blur(12px);
+    background: linear-gradient(
+      135deg,
+      rgba(26, 26, 37, 0.95) 0%,
+      rgba(18, 18, 26, 0.98) 100%
+    );
+  }
+
+  .morpheus-panel-glow {
+    @apply morpheus-panel;
+    box-shadow: 
+      0 0 0 1px rgba(167, 139, 250, 0.1),
+      0 4px 24px rgba(0, 0, 0, 0.4);
+    transition: box-shadow 0.3s ease;
+  }
+
+  .morpheus-panel-glow:hover {
+    box-shadow: 
+      0 0 0 1px rgba(167, 139, 250, 0.2),
+      0 4px 32px rgba(0, 0, 0, 0.5),
+      0 0 20px rgba(167, 139, 250, 0.05);
+  }
+
+  /* ---- Activity Log Entry ---- */
+
+  .log-entry {
+    @apply px-3 py-2 border-l-2 border-transparent text-sm;
+    animation: logSlideIn 0.3s ease-out;
+  }
+
+  .log-entry.analyzing {
+    @apply border-l-morpheus-nerve;
+  }
+
+  .log-entry.building {
+    @apply border-l-morpheus-success;
+  }
+
+  .log-entry.reviewing {
+    @apply border-l-morpheus-warning;
+  }
+
+  .log-entry.error {
+    @apply border-l-morpheus-error;
+  }
+
+  .log-entry.complete {
+    @apply border-l-morpheus-glow;
+  }
+
+  /* ---- Drop Zone ---- */
+
+  .drop-zone {
+    @apply border-2 border-dashed border-morpheus-border rounded-2xl 
+           flex flex-col items-center justify-center cursor-pointer
+           transition-all duration-300;
+    min-height: 200px;
+  }
+
+  .drop-zone:hover,
+  .drop-zone.drag-over {
+    @apply border-morpheus-glow;
+    background: radial-gradient(
+      ellipse at center,
+      rgba(167, 139, 250, 0.06) 0%,
+      transparent 70%
+    );
+    box-shadow: 
+      inset 0 0 40px rgba(167, 139, 250, 0.03),
+      0 0 30px rgba(167, 139, 250, 0.05);
+  }
+
+  /* ---- Code Line Highlight ---- */
+
+  .code-line-new {
+    animation: codeLineFlash 1s ease-out;
+    background: rgba(167, 139, 250, 0.05);
+  }
+
+  /* ---- Status Badge ---- */
+
+  .status-badge {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+
+  .status-badge.idle {
+    @apply bg-morpheus-border/30 text-morpheus-muted;
+  }
+
+  .status-badge.working {
+    @apply bg-morpheus-pulse/20 text-morpheus-dream;
+  }
+
+  .status-badge.done {
+    @apply bg-morpheus-success/20 text-morpheus-success;
+  }
+
+  /* ---- File Tab ---- */
+
+  .file-tab {
+    @apply px-3 py-1.5 text-xs font-mono rounded-t-lg cursor-pointer
+           transition-all duration-200 border border-b-0 border-transparent;
+    color: #64748b;
+  }
+
+  .file-tab:hover {
+    @apply text-morpheus-muted bg-morpheus-dark/50;
+  }
+
+  .file-tab.active {
+    @apply text-morpheus-glow bg-morpheus-dark border-morpheus-border;
+    box-shadow: 0 -2px 8px rgba(167, 139, 250, 0.1);
+  }
+
+  /* ---- Progress Bar ---- */
+
+  .morpheus-progress {
+    @apply h-1 rounded-full overflow-hidden bg-morpheus-border/30;
+  }
+
+  .morpheus-progress-fill {
+    @apply h-full rounded-full transition-all duration-500 ease-out;
+    background: linear-gradient(90deg, #7c3aed, #a78bfa, #22d3ee);
+    box-shadow: 0 0 10px rgba(167, 139, 250, 0.4);
+  }
+
+  /* ---- Morpheus Thought Bubble ---- */
+
+  .thought-bubble {
+    @apply relative px-4 py-2.5 rounded-2xl text-sm max-w-md;
+    background: linear-gradient(
+      135deg,
+      rgba(167, 139, 250, 0.1) 0%,
+      rgba(99, 102, 241, 0.05) 100%
+    );
+    border: 1px solid rgba(167, 139, 250, 0.15);
+  }
+
+  .thought-bubble::before {
+    content: '';
+    @apply absolute;
+    bottom: -6px;
+    left: 24px;
+    width: 12px;
+    height: 12px;
+    background: inherit;
+    border: inherit;
+    border-top: none;
+    border-left: none;
+    transform: rotate(45deg);
+  }
+}
+
+@layer utilities {
+
+  /* Glow text */
+  .text-glow {
+    text-shadow: 0 0 20px rgba(167, 139, 250, 0.5);
+  }
+
+  .text-glow-nerve {
+    text-shadow: 0 0 20px rgba(34, 211, 238, 0.5);
+  }
+
+  .text-glow-success {
+    text-shadow: 0 0 20px rgba(52, 211, 153, 0.5);
+  }
+
+  /* Noise texture overlay */
+  .noise-overlay {
+    position: relative;
+  }
+
+  .noise-overlay::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    opacity: 0.015;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* Hide scrollbar but keep scroll */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ---- Keyframes ---- */
+
+@keyframes eyeRotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes irisPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+
+@keyframes logSlideIn {
+  0% { 
+    opacity: 0; 
+    transform: translateX(-10px); 
+  }
+  100% { 
+    opacity: 1; 
+    transform: translateX(0); 
+  }
+}
+
+@keyframes codeLineFlash {
+  0% { background: rgba(167, 139, 250, 0.15); }
+  100% { background: rgba(167, 139, 250, 0.05); }
+}
+
+/* ---- Monaco Editor Overrides ---- */
+
+.monaco-editor {
+  background: transparent !important;
+}
+
+.monaco-editor .margin {
+  background: transparent !important;
+}
+
+.monaco-editor .monaco-editor-background {
+  background: transparent !important;
+}
