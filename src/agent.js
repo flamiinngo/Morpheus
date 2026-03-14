@@ -1,6 +1,10 @@
 // ============================================
 // MORPHEUS AGENT — The Autonomous Build Brain
 // Powered by Hermes 3 via OpenRouter
+//
+// Uses native Hermes <tool_call> format
+// instead of OpenRouter tools parameter
+// (no providers support tools for Hermes)
 // ============================================
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
@@ -210,17 +214,32 @@ export class MorpheusAgent {
     }
   }
 
+  // ============================================
+  // HERMES API CALL
+  // Uses native <tool_call> format in system prompt
+  // instead of OpenRouter tools parameter
+  // ============================================
   async callHermes(messages, tools = null, model = HERMES_MODEL) {
-    const body = {
-      model,
-      messages,
-      temperature: 0.3,
-      max_tokens: 8192,
+    // Inject tool definitions into system message for native Hermes function calling
+    // Hermes 3 was trained on <tool_call> format natively
+    let finalMessages = messages
+    if (tools && messages.length > 0) {
+      const toolDescriptions = tools.map(t => JSON.stringify(t.function, null, 2)).join('\n\n')
+      const toolSystemMsg = `\n\nYou have access to the following tools. To call a tool, you MUST respond with a JSON block in this EXACT format — no other text:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>\n\nAvailable tools:\n${toolDescriptions}\n\nRULES:\n- Call exactly ONE tool per response\n- Do NOT include any text outside the <tool_call> tags\n- The arguments must be valid JSON matching the tool's parameter schema\n- Always call a tool — never respond with plain text`
+
+      finalMessages = messages.map((msg, i) => {
+        if (i === 0 && msg.role === 'system') {
+          return { ...msg, content: msg.content + toolSystemMsg }
+        }
+        return msg
+      })
     }
 
-    if (tools) {
-      body.tools = tools
-      body.tool_choice = 'auto'
+    const body = {
+      model,
+      messages: finalMessages,
+      temperature: 0.3,
+      max_tokens: 8192,
     }
 
     let retries = 3
@@ -265,7 +284,35 @@ export class MorpheusAgent {
           throw new Error('Empty response from model')
         }
 
-        return result.choices[0].message
+        const message = result.choices[0].message
+
+        // Parse native Hermes <tool_call> format into standard tool_calls structure
+        if (message.content && message.content.includes('<tool_call>')) {
+          const toolCalls = []
+          const regex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g
+          let match
+          while ((match = regex.exec(message.content)) !== null) {
+            try {
+              const parsed = JSON.parse(match[1].trim())
+              toolCalls.push({
+                id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                type: 'function',
+                function: {
+                  name: parsed.name,
+                  arguments: JSON.stringify(parsed.arguments)
+                }
+              })
+            } catch (e) {
+              console.warn('Failed to parse tool call:', match[1])
+            }
+          }
+          if (toolCalls.length > 0) {
+            message.tool_calls = toolCalls
+            message.content = null
+          }
+        }
+
+        return message
 
       } catch (error) {
         if (error.name === 'AbortError') throw error
@@ -281,7 +328,11 @@ export class MorpheusAgent {
     }
   }
 
-    async analyzeScreenshot(imageBase64) {
+  // ============================================
+  // VISION — Screenshot Analysis
+  // Uses Gemini Flash via direct fetch
+  // ============================================
+  async analyzeScreenshot(imageBase64) {
     this.setStatus('analyzing')
     this.emit('log', {
       type: 'analyzing',
@@ -301,7 +352,6 @@ export class MorpheusAgent {
       message: `Image size: ${sizeKB}KB — sending to vision model...`
     })
 
-    // Build the request manually to avoid any encoding issues
     const requestBody = {
       model: VISION_MODEL,
       messages: [
@@ -325,8 +375,6 @@ export class MorpheusAgent {
       max_tokens: 4096
     }
 
-    // Make the fetch call directly instead of going through callHermes
-    // This avoids any tool-related parameters being added
     let retries = 3
     let delay = 3000
     let visionResponse = null
@@ -394,6 +442,10 @@ export class MorpheusAgent {
     return visionResponse.content
   }
 
+  // ============================================
+  // MAIN AGENT LOOP
+  // analyze → plan → [write → review → fix]* → complete
+  // ============================================
   async run(imageBase64) {
     if (this.isRunning) return
     this.isRunning = true
@@ -583,6 +635,10 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     }
   }
 
+  // ============================================
+  // HISTORY MANAGEMENT
+  // Trim conversation to avoid token limits
+  // ============================================
   trimHistory() {
     const system = this.conversationHistory[0]
     const firstUser = this.conversationHistory[1]
@@ -601,6 +657,10 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
     })
   }
 
+  // ============================================
+  // TOOL CALL HANDLER
+  // Routes tool calls to the right handler
+  // ============================================
   async handleToolCall(toolCall) {
     const { name, arguments: argsStr } = toolCall.function
     let args
@@ -653,6 +713,8 @@ You must work AUTONOMOUSLY. Do not ask for confirmation. Just build.`
         })
     }
   }
+
+  // ---- Tool Handlers ----
 
   async handleAnalyze(toolCallId, args) {
     this.emit('log', {
