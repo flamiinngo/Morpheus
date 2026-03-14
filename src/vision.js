@@ -33,35 +33,86 @@ export function resizeImage(file, maxDimension = 1024) {
     img.onload = () => {
       URL.revokeObjectURL(url)
 
-      let { width, height } = img
+      try {
+        let { width, height } = img
 
-      const ratio = Math.min(maxDimension / width, maxDimension / height, 1)
-      const newWidth = Math.round(width * ratio)
-      const newHeight = Math.round(height * ratio)
+        // Guard against zero-dimension images
+        if (width === 0 || height === 0) {
+          reject(new Error('Image has zero dimensions'))
+          return
+        }
 
-      const canvas = document.createElement('canvas')
-      canvas.width = newWidth
-      canvas.height = newHeight
+        const ratio = Math.min(maxDimension / width, maxDimension / height, 1)
+        const newWidth = Math.round(width * ratio)
+        const newHeight = Math.round(height * ratio)
 
-      const ctx = canvas.getContext('2d')
-      ctx.imageSmoothingEnabled = true
-      ctx.imageSmoothingQuality = 'high'
-      ctx.drawImage(img, 0, 0, newWidth, newHeight)
+        const canvas = document.createElement('canvas')
+        canvas.width = newWidth
+        canvas.height = newHeight
 
-      canvas.toBlob((blob) => {
-        const reader = new FileReader()
-        reader.onloadend = () => {
-          const base64 = reader.result.split(',')[1]
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          reject(new Error('Failed to get canvas 2D context'))
+          return
+        }
+
+        ctx.imageSmoothingEnabled = true
+        ctx.imageSmoothingQuality = 'high'
+        ctx.drawImage(img, 0, 0, newWidth, newHeight)
+
+        // Use toBlob with a fallback to toDataURL
+        try {
+          canvas.toBlob(
+            (blob) => {
+              if (!blob) {
+                // Fallback: use toDataURL if toBlob fails
+                try {
+                  const dataUrl = canvas.toDataURL('image/jpeg', 0.7)
+                  const base64 = dataUrl.split(',')[1]
+                  if (!base64) {
+                    reject(new Error('Failed to convert image to base64'))
+                    return
+                  }
+                  resolve(base64)
+                } catch (e) {
+                  reject(new Error('Failed to encode image: ' + e.message))
+                }
+                return
+              }
+
+              const reader = new FileReader()
+              reader.onloadend = () => {
+                const base64 = reader.result.split(',')[1]
+                if (!base64) {
+                  reject(new Error('Failed to read blob as base64'))
+                  return
+                }
+                resolve(base64)
+              }
+              reader.onerror = () => reject(new Error('Failed to read blob'))
+              reader.readAsDataURL(blob)
+            },
+            'image/jpeg',
+            0.7
+          )
+        } catch (blobErr) {
+          // Final fallback: toDataURL
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.7)
+          const base64 = dataUrl.split(',')[1]
+          if (!base64) {
+            reject(new Error('Failed to convert image'))
+            return
+          }
           resolve(base64)
         }
-        reader.onerror = () => reject(new Error('Failed to read blob'))
-        reader.readAsDataURL(blob)
-      }, 'image/jpeg', 0.7)
+      } catch (err) {
+        reject(new Error('Failed to process image: ' + err.message))
+      }
     }
 
     img.onerror = () => {
       URL.revokeObjectURL(url)
-      reject(new Error('Failed to load image'))
+      reject(new Error('Failed to load image. The file may be corrupt or unsupported.'))
     }
 
     img.src = url
@@ -79,21 +130,35 @@ export function createThumbnail(file, maxDimension = 300) {
     img.onload = () => {
       URL.revokeObjectURL(url)
 
-      let { width, height } = img
-      const ratio = Math.min(maxDimension / width, maxDimension / height, 1)
-      const newWidth = Math.round(width * ratio)
-      const newHeight = Math.round(height * ratio)
+      try {
+        let { width, height } = img
+        if (width === 0 || height === 0) {
+          reject(new Error('Image has zero dimensions'))
+          return
+        }
 
-      const canvas = document.createElement('canvas')
-      canvas.width = newWidth
-      canvas.height = newHeight
+        const ratio = Math.min(maxDimension / width, maxDimension / height, 1)
+        const newWidth = Math.round(width * ratio)
+        const newHeight = Math.round(height * ratio)
 
-      const ctx = canvas.getContext('2d')
-      ctx.imageSmoothingEnabled = true
-      ctx.imageSmoothingQuality = 'medium'
-      ctx.drawImage(img, 0, 0, newWidth, newHeight)
+        const canvas = document.createElement('canvas')
+        canvas.width = newWidth
+        canvas.height = newHeight
 
-      resolve(canvas.toDataURL('image/jpeg', 0.6))
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          reject(new Error('Failed to get canvas context'))
+          return
+        }
+
+        ctx.imageSmoothingEnabled = true
+        ctx.imageSmoothingQuality = 'medium'
+        ctx.drawImage(img, 0, 0, newWidth, newHeight)
+
+        resolve(canvas.toDataURL('image/jpeg', 0.6))
+      } catch (err) {
+        reject(new Error('Failed to create thumbnail: ' + err.message))
+      }
     }
 
     img.onerror = () => {
@@ -123,6 +188,10 @@ export function validateImage(file) {
   if (file.size > maxSize) {
     const sizeMB = (file.size / (1024 * 1024)).toFixed(1)
     return { valid: false, error: `File too large: ${sizeMB}MB. Maximum is 20MB.` }
+  }
+
+  if (file.size === 0) {
+    return { valid: false, error: 'File is empty (0 bytes).' }
   }
 
   return { valid: true }
